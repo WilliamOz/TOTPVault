@@ -32,7 +32,6 @@ function Compile([string]$kind, [string]$exe, [string[]]$references, [string[]]$
 try {
     $server = Join-Path $payload 'TOTPVault-Servidor.exe'
     $client = Join-Path $payload 'TOTPVault.exe'
-    $installer = Join-Path $out 'Instalar-TOTPVault-Windows.exe'
     $serverSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'server') -Filter '*.cs' | ForEach-Object FullName)
     Compile 'exe' $server @('System.Security','System.ServiceProcess','System.DirectoryServices.Protocols','System.Web.Extensions') $serverSources
 
@@ -49,12 +48,18 @@ try {
     [IO.File]::WriteAllText($destination, $defaults, (New-Object Text.UTF8Encoding $true))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $payload
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = Join-Path $build 'payload.zip'
+    $hashes = Get-ChildItem -LiteralPath $payload -File | Sort-Object Name | ForEach-Object {
+        '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $_.Name
+    }
+    [IO.File]::WriteAllLines((Join-Path $payload 'SHA256SUMS.txt'), [string[]]$hashes)
+    $zip = Join-Path $build 'TOTPVault-Windows-Instalacao.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($payload, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
-    Compile 'exe' $installer @('System.IO.Compression','System.IO.Compression.FileSystem') @((Join-Path $PSScriptRoot 'setup/Bootstrap.cs')) @("/resource:$zip,totpvault-setup.zip")
+    Copy-Item -LiteralPath $zip -Destination $out -Force
     Copy-Item -LiteralPath $client -Destination (Join-Path $out 'TOTPVault-Windows-Nativo.exe') -Force
-    & $installer --verify-payload
-    if ($LASTEXITCODE -ne 0) { throw 'O instalador não contém todos os arquivos.' }
 } finally {
-    if (Test-Path -LiteralPath $build) { [IO.Directory]::Delete($build, $true) }
+    $scratch = Get-Item -LiteralPath $build -ErrorAction SilentlyContinue
+    if ($scratch -and $scratch.Parent.FullName -eq $out.TrimEnd([char[]]'\/') -and
+        $scratch.Name -cmatch '^build-[0-9a-f]{32}$' -and !$scratch.LinkType) {
+        [IO.Directory]::Delete($scratch.FullName, $true)
+    }
 }

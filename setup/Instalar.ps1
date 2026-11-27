@@ -20,7 +20,7 @@ function Require-Value([string]$label) {
     return $value
 }
 
-function Protect-Directory([string]$path, [Security.Principal.SecurityIdentifier]$worker) {
+function Protect-Directory([string]$path, [Security.Principal.SecurityIdentifier]$worker = $null) {
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetAccessRuleProtection($true, $false)
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
@@ -29,8 +29,10 @@ function Protect-Directory([string]$path, [Security.Principal.SecurityIdentifier
         $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', $inherit, 'None', 'Allow')
         $acl.AddAccessRule($rule)
     }
-    $rule = New-Object Security.AccessControl.FileSystemAccessRule($worker, 'Modify', $inherit, 'None', 'Allow')
-    $acl.AddAccessRule($rule)
+    if ($null -ne $worker) {
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($worker, 'Modify', $inherit, 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
     Set-Acl -LiteralPath $path -AclObject $acl
 }
 
@@ -41,7 +43,8 @@ $ruleAdded = $false
 $programCreated = $false
 $dataCreated = $false
 $createdCertificate = $null
-$probePath = Join-Path $PSScriptRoot 'probe'
+$probePath = Join-Path $env:ProgramData ('TOTPVaultProbe-' + [Guid]::NewGuid().ToString('N'))
+$probeCreated = $false
 $success = $false
 try {
     $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -92,6 +95,8 @@ try {
         BindIdentity = $bind; ProtectedBindPassword = $secret; AdminGroupDn = $admin; AccessGroupDn = $access
     }
     $null = New-Item -ItemType Directory -Path $probePath
+    $probeCreated = $true
+    Protect-Directory $probePath
     $utf8 = New-Object Text.UTF8Encoding $false
     $probeConfig = Join-Path $probePath 'servidor.json'
     [IO.File]::WriteAllText($probeConfig, ($settings | ConvertTo-Json), $utf8)
@@ -180,6 +185,18 @@ try {
     if ($urlAdded) { & netsh.exe http delete urlacl "url=$prefix" | Out-Null }
     if ($createdCertificate) { Remove-Item -LiteralPath "Cert:\LocalMachine\My\$createdCertificate" -ErrorAction SilentlyContinue }
     if ($programCreated -or $dataCreated) { Write-Host 'O serviço foi revertido. Os arquivos locais foram preservados para diagnóstico.' }
+} finally {
+    if ($probeCreated) {
+        $probeConfig = Join-Path $probePath 'servidor.json'
+        if (Test-Path -LiteralPath $probeConfig -PathType Leaf) {
+            Remove-Item -LiteralPath $probeConfig -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $probePath -PathType Container) {
+            if (!(Get-ChildItem -LiteralPath $probePath -Force)) {
+                [IO.Directory]::Delete($probePath)
+            }
+        }
+    }
 }
 Write-Host ''
 $null = Read-Host 'Pressione Enter para sair'
