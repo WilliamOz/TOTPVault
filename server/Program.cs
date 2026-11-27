@@ -4,7 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Security;
 using System.Runtime.Versioning;
-using System.ServiceProcess;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Web.Script.Serialization;
 
@@ -12,44 +12,46 @@ using System.Web.Script.Serialization;
 
 namespace TotpVault.Server {
     internal static class Program {
-        internal const string ServiceName = "TOTPVaultNative";
         private static string root;
 
         private static int Main(string[] args) {
             if (args.Length == 3 && args[0] == "--health") {
                 return CheckHealth(args[1], args[2]) ? 0 : 1;
             }
-            root = args.Length == 2 ? Path.GetFullPath(args[1]) : Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "TOTPVaultNative");
+            if (args.Length != 2 || (args[0] != "--probe" && args[0] != "--portable")) {
+                Console.WriteLine("Uso: TOTPVault-Servidor.exe --portable \"C:\\TOTPVault\\dados\"");
+                return 2;
+            }
+            root = Path.GetFullPath(args[1]);
             bool probe = args.Length == 2 && args[0] == "--probe";
             try {
                 if (probe) {
                     Console.WriteLine(new ActiveDirectory(ReadConfig()).Probe());
-                } else if (args.Length == 2 && args[0] == "--console") {
-                    using (var server = Open()) {
+                } else {
+                    var settings = ReadConfig();
+                    using (var owner = File.Open(Path.Combine(root, "servidor.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                    using (var server = Open(settings)) {
                         Console.WriteLine("TOTPVault em execução.");
                         using (var stop = new ManualResetEvent(false)) {
-                            Console.CancelKeyPress += (s, e) => { e.Cancel = true; stop.Set(); };
+                            if (Environment.UserInteractive) {
+                                Console.CancelKeyPress += (s, e) => { e.Cancel = true; stop.Set(); };
+                            }
                             stop.WaitOne();
                         }
                     }
-                } else if (args.Length == 0) {
-                    ServiceBase.Run(new WindowsVaultService());
-                } else {
-                    return 2;
                 }
                 return 0;
             } catch (LdapException e) {
                 if (probe) Console.Error.WriteLine("Falha no LDAPS. Código Windows LDAP: " + e.ErrorCode + ".");
-                else Log(e);
+                else Report(e);
                 return 1;
             } catch (DirectoryOperationException e) {
                 if (probe) Console.Error.WriteLine("Falha ao consultar o AD. Código LDAP: " + (e.Response == null ? "indisponível" : e.Response.ResultCode.ToString()) + ".");
-                else Log(e);
+                else Report(e);
                 return 1;
             } catch (Exception e) {
                 if (probe) Console.Error.WriteLine("Falha de configuração: " + e.GetType().Name + ".");
-                else Log(e);
+                else Report(e);
                 return 1;
             }
         }
@@ -62,9 +64,14 @@ namespace TotpVault.Server {
                 request.Proxy = null;
                 request.Timeout = 3000;
                 // Setup knows the exact certificate selected from the local Windows store.
-                request.ServerCertificateValidationCallback = (sender, cert, chain, errors) =>
-                    cert != null && (errors & (SslPolicyErrors.RemoteCertificateNotAvailable | SslPolicyErrors.RemoteCertificateNameMismatch)) == 0
-                    && string.Equals(cert.GetCertHashString(), thumbprint, StringComparison.OrdinalIgnoreCase);
+                request.ServerCertificateValidationCallback = (sender, cert, chain, errors) => {
+                    if (cert == null || (errors & (SslPolicyErrors.RemoteCertificateNotAvailable | SslPolicyErrors.RemoteCertificateNameMismatch)) != 0
+                        || !string.Equals(cert.GetCertHashString(), thumbprint, StringComparison.OrdinalIgnoreCase)) return false;
+                    using (var selected = new X509Certificate2(cert)) {
+                        var now = DateTime.Now;
+                        return selected.NotBefore <= now && selected.NotAfter > now;
+                    }
+                };
                 using (var response = (HttpWebResponse)request.GetResponse()) {
                     return response.StatusCode == HttpStatusCode.OK && response.ContentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase);
                 }
@@ -80,10 +87,8 @@ namespace TotpVault.Server {
             return settings;
         }
 
-        private static ApiServer Open() {
-            var settings = ReadConfig();
+        private static ApiServer Open(ServerConfig settings) {
             var directory = new ActiveDirectory(settings);
-            directory.Probe();
             var server = new ApiServer(settings.Prefix, new VaultStore(root), directory, Log);
             try {
                 server.Start();
@@ -109,24 +114,9 @@ namespace TotpVault.Server {
             } catch (IOException) {} catch (UnauthorizedAccessException) {}
         }
 
-        private sealed class WindowsVaultService : ServiceBase {
-            private ApiServer server;
-
-            internal WindowsVaultService() {
-                ServiceName = Program.ServiceName;
-                CanStop = true;
-                AutoLog = false;
-            }
-
-            protected override void OnStart(string[] args) {
-                RequestAdditionalTime(25000);
-                try { server = Open(); }
-                catch (Exception e) { Log(e); throw; }
-            }
-
-            protected override void OnStop() {
-                if (server != null) server.Dispose();
-            }
+        private static void Report(Exception failure) {
+            Console.Error.WriteLine("Falha ao iniciar o TOTPVault: " + failure.GetType().Name + ". Confira dados/servico.log.");
+            Log(failure);
         }
     }
 }

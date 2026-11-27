@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$ServerIp,
     [Parameter(Mandatory = $true)][string]$AdHost,
+    [string]$BindIdentity = '',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'bin')
 )
 
@@ -20,7 +21,7 @@ if (!(Test-Path -LiteralPath $compiler)) { throw 'Compilador do .NET Framework 4
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $out = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $build = Join-Path $out ('build-' + [guid]::NewGuid().ToString('N'))
-$payload = Join-Path $build 'payload'
+$payload = Join-Path $build 'TOTPVault'
 $null = New-Item -ItemType Directory -Path $payload
 
 function Compile([string]$kind, [string]$exe, [string[]]$references, [string[]]$sources, [string[]]$extra = @()) {
@@ -33,7 +34,7 @@ try {
     $server = Join-Path $payload 'TOTPVault-Servidor.exe'
     $client = Join-Path $payload 'TOTPVault.exe'
     $serverSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'server') -Filter '*.cs' | ForEach-Object FullName)
-    Compile 'exe' $server @('System.Security','System.ServiceProcess','System.DirectoryServices.Protocols','System.Web.Extensions') $serverSources
+    Compile 'exe' $server @('System.Security','System.DirectoryServices.Protocols','System.Web.Extensions') $serverSources
 
     $settings = Join-Path $build 'BuildSettings.g.cs'
     $url = ConvertTo-Json -InputObject "https://$ServerIp" -Compress
@@ -41,21 +42,29 @@ try {
     $clientSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'desktop') -Filter '*.cs' | ForEach-Object FullName) + @($settings)
     Compile 'winexe' $client @('System.Net.Http','System.Web.Extensions','System.Windows.Forms','System.Drawing') $clientSources
 
-    $script = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'setup/Instalar.ps1'))
-    [IO.File]::WriteAllText((Join-Path $payload 'Instalar.ps1'), $script, (New-Object Text.UTF8Encoding $true))
+    foreach ($script in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'portable') -Filter '*.ps1' -File) {
+        $body = [IO.File]::ReadAllText($script.FullName)
+        [IO.File]::WriteAllText((Join-Path $payload $script.Name), $body, [Text.UTF8Encoding]::new($true))
+    }
     $destination = Join-Path $payload 'implantacao.json'
-    $defaults = @{ serverIp = $ServerIp; adHost = $AdHost } | ConvertTo-Json
+    $defaults = @{ serverIp = $ServerIp; adHost = $AdHost; bindIdentity = $BindIdentity } | ConvertTo-Json
     [IO.File]::WriteAllText($destination, $defaults, (New-Object Text.UTF8Encoding $true))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $payload
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $payload 'LEIA-ME.md')
+    $source = Join-Path $payload 'fontes'
+    $null = New-Item -ItemType Directory -Path $source
+    foreach ($part in 'Build.ps1','README.md','LICENSE','server','desktop','portable','tests') {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $part) -Destination $source -Recurse
+    }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $hashes = Get-ChildItem -LiteralPath $payload -File | Sort-Object Name | ForEach-Object {
-        '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $_.Name
+    $hashes = Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
+        $relative = $_.FullName.Substring($payload.Length + 1).Replace('\','/')
+        '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash, $relative
     }
     [IO.File]::WriteAllLines((Join-Path $payload 'SHA256SUMS.txt'), [string[]]$hashes)
-    $zip = Join-Path $build 'TOTPVault-Windows-Instalacao.zip'
-    [IO.Compression.ZipFile]::CreateFromDirectory($payload, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
+    $zip = Join-Path $build 'TOTPVault-Portatil.zip'
+    [IO.Compression.ZipFile]::CreateFromDirectory($payload, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
     Copy-Item -LiteralPath $zip -Destination $out -Force
-    Copy-Item -LiteralPath $client -Destination (Join-Path $out 'TOTPVault-Windows-Nativo.exe') -Force
 } finally {
     $scratch = Get-Item -LiteralPath $build -ErrorAction SilentlyContinue
     if ($scratch -and $scratch.Parent.FullName -eq $out.TrimEnd([char[]]'\/') -and
