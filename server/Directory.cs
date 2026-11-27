@@ -11,6 +11,8 @@ namespace TotpVault.Server {
         public int Port { get; set; }
         public string AdHost { get; set; }
         public int AdPort { get; set; }
+        public string AdTransport { get; set; }
+        public string KerberosDomain { get; set; }
         public string BaseDn { get; set; }
         public string BindIdentity { get; set; }
         public string ProtectedBindPassword { get; set; }
@@ -20,14 +22,23 @@ namespace TotpVault.Server {
         internal void Validate() {
             IPAddress address;
             if (!IPAddress.TryParse(BindIp, out address) || address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
-                || Port < 1 || Port > 65535 || AdPort < 1 || AdPort > 65535
+                || Port < 1 || Port > 65535 || AdPort != (UsesKerberos ? 389 : 636)
+                || (!UsesKerberos && !string.IsNullOrEmpty(AdTransport)
+                    && !string.Equals(AdTransport, "LDAPS", StringComparison.OrdinalIgnoreCase))
                 || Uri.CheckHostName(AdHost ?? "") != UriHostNameType.Dns || !AdHost.Contains(".")
                 || string.IsNullOrWhiteSpace(BindIdentity) || string.IsNullOrWhiteSpace(ProtectedBindPassword)
                 || string.IsNullOrWhiteSpace(AdminGroupDn)) {
                 throw new InvalidOperationException("Configuração do servidor incompleta.");
             }
+            if (UsesKerberos && (Uri.CheckHostName(KerberosDomain ?? "") != UriHostNameType.Dns
+                || !KerberosDomain.Contains(".") || !AdHost.EndsWith("." + KerberosDomain, StringComparison.OrdinalIgnoreCase)
+                || !BindIdentity.EndsWith("@" + KerberosDomain, StringComparison.OrdinalIgnoreCase)
+                || BindIdentity.IndexOf('@') <= 0 || BindIdentity.IndexOf('@') != BindIdentity.LastIndexOf('@'))) {
+                throw new InvalidOperationException("Kerberos exige um controlador no domínio e o UPN da conta de serviço.");
+            }
         }
 
+        internal bool UsesKerberos { get { return string.Equals(AdTransport, "Kerberos", StringComparison.OrdinalIgnoreCase); } }
         internal string Prefix { get { return "https://" + BindIp + ":" + Port + "/"; } }
     }
 
@@ -67,7 +78,8 @@ namespace TotpVault.Server {
                 var identity = Authorize(ldap, entry);
                 if (identity == null) return null;
                 try {
-                    using (Connect(new NetworkCredential(entry.DistinguishedName, password))) { }
+                    var principal = config.UsesKerberos ? identity.Username + "@" + config.KerberosDomain : entry.DistinguishedName;
+                    using (Connect(new NetworkCredential(principal, password))) { }
                 } catch (LdapException e) {
                     if (e.ErrorCode == 49) return null;
                     throw;
@@ -93,16 +105,25 @@ namespace TotpVault.Server {
             }
         }
 
-        private LdapConnection Connect(NetworkCredential credential) {
+        internal LdapConnection Connect(NetworkCredential credential) {
             var identifier = new LdapDirectoryIdentifier(config.AdHost, config.AdPort, true, false);
-            var ldap = new LdapConnection(identifier, credential, AuthType.Basic);
+            var ldap = new LdapConnection(identifier, credential, config.UsesKerberos ? AuthType.Kerberos : AuthType.Basic);
             try {
                 ldap.Timeout = TimeSpan.FromSeconds(6);
                 ldap.SessionOptions.ProtocolVersion = 3;
                 ldap.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
-                // WinLDAP uses the operating system's certificate validation. No validation callback overrides it.
-                ldap.SessionOptions.SecureSocketLayer = true;
+                if (config.UsesKerberos) {
+                    // Require the Kerberos security layer. Do not negotiate an alternate package or simple bind.
+                    ldap.SessionOptions.Signing = true;
+                    ldap.SessionOptions.Sealing = true;
+                } else {
+                    // WinLDAP uses the operating system's certificate validation.
+                    ldap.SessionOptions.SecureSocketLayer = true;
+                }
                 ldap.Bind();
+                if (config.UsesKerberos && (!ldap.SessionOptions.Signing || !ldap.SessionOptions.Sealing)) {
+                    throw new InvalidOperationException("A conexão Kerberos deve ser assinada e criptografada.");
+                }
                 return ldap;
             } catch {
                 ldap.Dispose();
@@ -120,9 +141,11 @@ namespace TotpVault.Server {
         }
 
         private static void CheckGroup(LdapConnection ldap, string dn) {
-            var request = new SearchRequest(dn, "(objectClass=group)", SearchScope.Base, "distinguishedName");
-            if (((SearchResponse)ldap.SendRequest(request)).Entries.Count != 1) {
-                throw new InvalidOperationException("Um grupo configurado não está visível no AD.");
+            var request = new SearchRequest(dn, "(objectClass=group)", SearchScope.Base, "groupType");
+            var response = (SearchResponse)ldap.SendRequest(request);
+            int groupType;
+            if (response.Entries.Count != 1 || !int.TryParse(Text(response.Entries[0], "groupType"), out groupType) || groupType >= 0) {
+                throw new InvalidOperationException("O DN informado precisa identificar um grupo de segurança visível no AD.");
             }
         }
 

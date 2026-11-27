@@ -1,6 +1,6 @@
 # TOTPVault portátil para Windows
 
-O cofre e o cliente são programas nativos do Windows e usam o .NET Framework 4.8 ou posterior. A edição portátil é executada diretamente da pasta. O servidor usa HTTPS pelo HTTP.sys, Active Directory via LDAPS e o DPAPI do Windows para proteger a configuração e o cofre local.
+O cofre e o cliente são programas nativos do Windows e usam o .NET Framework 4.8 ou posterior. A edição portátil é executada diretamente da pasta. O servidor usa HTTPS pelo HTTP.sys, Active Directory via LDAPS ou LDAP com Kerberos e o DPAPI do Windows para proteger a configuração e o cofre local.
 
 ## Preparar e iniciar
 
@@ -13,9 +13,11 @@ Set-Location C:\TOTPVault
 .\Inicio-Automatico.ps1
 ```
 
-O primeiro comando de configuração lê o domínio, testa LDAPS e o grupo administrador, prepara o HTTPS e cria uma regra de firewall limitada à sub-rede local e aos perfis Domínio e Privado. A conta de serviço do AD precisa de acesso somente de leitura. Use o DN completo de um grupo do AD para administrar o cofre. O campo da Base DN pode ficar em branco para detecção automática.
+O primeiro comando de configuração valida a conexão ao AD e o grupo administrador, prepara o HTTPS e cria uma regra de firewall limitada à sub-rede local e aos perfis Domínio e Privado. A conta de serviço do AD precisa de acesso somente de leitura. Use o DN completo de um grupo de segurança do AD para administrar o cofre. O campo da Base DN pode ficar em branco para detecção automática.
 
-A CA do certificado LDAPS precisa ser confiável no repositório de **Máquina Local** do servidor. O instalador antigo fica em quarentena conforme o processo da TI. Este ZIP usa arquivos separados e o build não é assinado. Se o produto de segurança alertar sobre algum arquivo, preserve o alerta e encaminhe o nome e o hash para análise pela TI. Os hashes do pacote estão em `SHA256SUMS.txt`.
+No modo LDAPS (TCP 636), a CA do certificado do controlador precisa ser confiável no repositório de **Máquina Local** do servidor. No modo Kerberos (LDAP na TCP 389), o Windows exige sessão assinada e criptografada por Kerberos. Use o FQDN do controlador e o UPN da conta de serviço do mesmo domínio. O servidor precisa resolver o DNS do domínio, ter hora sincronizada e alcançar o KDC (porta 88). O cliente TOTPVault continua usando HTTPS em ambos os modos. [Proteções de sessão do LDAP](https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/ldap-channel-binding)
+
+O instalador antigo fica em quarentena conforme o processo da TI. Este ZIP usa arquivos separados e o build não é assinado. Se o produto de segurança alertar sobre algum arquivo, preserve o alerta e encaminhe o nome e o hash para análise pela TI. Os hashes do pacote estão em `SHA256SUMS.txt`.
 
 Para o HTTPS do cofre, informe o thumbprint de um certificado corporativo existente, em `LocalMachine\My`, com chave privada e com o IPv4 do cofre no SAN. Se escolher o certificado gerado pelo Windows, a TI precisa distribuir a parte pública `TOTPVault-HTTPS.cer` para os PCs pelo mecanismo de confiança da empresa, após conferir o SHA-256 exibido.
 
@@ -38,4 +40,4 @@ Em um Windows com .NET Framework 4.8 ou posterior, a partir da pasta de fontes:
 .\Build.ps1 -ServerIp '192.0.2.10' -AdHost 'dc01.example.com'
 ```
 
-O build gera `TOTPVault-Portatil.zip` com a pasta `TOTPVault`, os dois executáveis, scripts, código-fonte, licença e hashes. Os endereços da empresa entram na compilação. O repositório não inclui credenciais nem certificados da empresa.
+Para usar Kerberos, acrescente `-AdTransport Kerberos -KerberosDomain 'example.com'`. O build gera `TOTPVault-Portatil.zip` com a pasta `TOTPVault`, os dois executáveis, scripts, código-fonte, licença e hashes. Os endereços da empresa entram na compilação. O repositório não inclui credenciais nem certificados da empresa.

@@ -42,7 +42,7 @@ namespace TotpVault.Server {
                 }
                 return 0;
             } catch (LdapException e) {
-                if (probe) Console.Error.WriteLine("Falha no LDAPS. Código Windows LDAP: " + e.ErrorCode + ".");
+                if (probe) Console.Error.WriteLine("Falha na conexão com o AD. Código Windows LDAP: " + e.ErrorCode + ".");
                 else Report(e);
                 return 1;
             } catch (DirectoryOperationException e) {

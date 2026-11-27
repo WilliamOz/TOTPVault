@@ -2,6 +2,9 @@ param(
     [Parameter(Mandatory = $true)][string]$ServerIp,
     [Parameter(Mandatory = $true)][string]$AdHost,
     [string]$BindIdentity = '',
+    [ValidateSet('LDAPS','Kerberos')][string]$AdTransport = 'LDAPS',
+    [string]$KerberosDomain = '',
+    [string]$AdminGroupDn = '',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'bin')
 )
 
@@ -12,7 +15,11 @@ if (![Net.IPAddress]::TryParse($ServerIp, [ref]$address) -or
     throw 'Use um IPv4 válido para o servidor.'
 }
 if ([Uri]::CheckHostName($AdHost) -ne [UriHostNameType]::Dns -or !$AdHost.Contains('.')) {
-    throw 'Use o nome DNS completo do controlador LDAPS.'
+    throw 'Use o nome DNS completo do controlador do AD.'
+}
+if ($AdTransport -eq 'Kerberos' -and ([Uri]::CheckHostName($KerberosDomain) -ne [UriHostNameType]::Dns -or
+    !$KerberosDomain.Contains('.') -or !$AdHost.EndsWith('.' + $KerberosDomain,[StringComparison]::OrdinalIgnoreCase))) {
+    throw 'Informe o domínio DNS do controlador com -KerberosDomain.'
 }
 $ServerIp = $address.ToString()
 $root = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319'
@@ -47,7 +54,10 @@ try {
         [IO.File]::WriteAllText((Join-Path $payload $script.Name), $body, [Text.UTF8Encoding]::new($true))
     }
     $destination = Join-Path $payload 'implantacao.json'
-    $defaults = @{ serverIp = $ServerIp; adHost = $AdHost; bindIdentity = $BindIdentity } | ConvertTo-Json
+    $defaults = @{
+        serverIp = $ServerIp; adHost = $AdHost; bindIdentity = $BindIdentity
+        adTransport = $AdTransport; kerberosDomain = $KerberosDomain; adminGroupDn = $AdminGroupDn
+    } | ConvertTo-Json
     [IO.File]::WriteAllText($destination, $defaults, (New-Object Text.UTF8Encoding $true))
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $payload
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $payload 'LEIA-ME.md')

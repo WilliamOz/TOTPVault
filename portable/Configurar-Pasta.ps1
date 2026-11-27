@@ -37,12 +37,20 @@ foreach ($filename in 'TOTPVault-Servidor.exe','TOTPVault.exe','implantacao.json
     Protect-TotpPath (Join-Path $TotpRoot $filename) 'ReadAndExecute'
 }
 
-$adHost = (Read-Host "Controlador LDAPS [$($init.adHost)]").Trim()
+$transport = if ($init.adTransport) { [string]$init.adTransport } else { 'LDAPS' }
+if ($transport -notin @('LDAPS','Kerberos')) { throw 'Modo de conexão com o AD inválido.' }
+$kerberos = $transport -eq 'Kerberos'
+$adPort = if ($kerberos) { 389 } else { 636 }
+$adHost = (Read-Host "Controlador do AD por $transport [$($init.adHost)]").Trim()
 if (!$adHost) { $adHost = [string]$init.adHost }
-$account = (Read-Host "UPN ou DN da conta de serviço somente leitura [$($init.bindIdentity)]").Trim()
+$formato = if ($kerberos) { 'UPN' } else { 'UPN ou DN' }
+$account = (Read-Host "$formato da conta de serviço somente leitura [$($init.bindIdentity)]").Trim()
 if (!$account) { $account = [string]$init.bindIdentity }
 if (!$account) { throw 'Informe o UPN ou DN da conta de serviço.' }
-$administrators = (Read-Host 'DN completo do grupo de administradores do cofre').Trim()
+$groupDefault = [string]$init.adminGroupDn
+$groupLabel = if ($groupDefault) { "DN do grupo de administradores do cofre [$groupDefault]" } else { 'DN completo do grupo de administradores do cofre' }
+$administrators = (Read-Host $groupLabel).Trim()
+if (!$administrators) { $administrators = $groupDefault }
 if (!$administrators) { throw 'Informe o DN completo do grupo de administradores.' }
 $access = (Read-Host 'DN do grupo que pode entrar no cofre (opcional)').Trim()
 $baseDn = (Read-Host 'Base DN (Enter para detectar automaticamente)').Trim()
@@ -64,7 +72,8 @@ try {
 }
 
 $config = [ordered]@{
-    BindIp = $ip; Port = $port; AdHost = $adHost; AdPort = 636; BaseDn = $baseDn; BindIdentity = $account
+    BindIp = $ip; Port = $port; AdHost = $adHost; AdPort = $adPort; BaseDn = $baseDn; BindIdentity = $account
+    AdTransport = $transport; KerberosDomain = [string]$init.kerberosDomain
     ProtectedBindPassword = $protected; AdminGroupDn = $administrators; AccessGroupDn = $access
 }
 $probe = Join-Path $TotpRoot ('probe-' + [Guid]::NewGuid().ToString('N'))
@@ -83,9 +92,12 @@ try {
     $null = New-Item -ItemType Directory -Path $probe
     Protect-TotpPath $probe
     [IO.File]::WriteAllText($probeConfig,($config | ConvertTo-Json),$utf8)
-    Write-Host 'Validando LDAPS e grupos com o controlador…'
+    Write-Host "Validando $transport e grupos com o controlador…"
     $resolved = & $TotpServer --probe $probe
-    if ($LASTEXITCODE -ne 0) { throw 'Não foi possível validar o LDAPS. Confira certificado, CA e conta de serviço.' }
+    if ($LASTEXITCODE -ne 0) {
+        if ($kerberos) { throw 'Kerberos indisponível. Confira DNS do domínio, relógio, portas TCP 88 e 389 e UPN/senha da conta de serviço.' }
+        throw 'Não foi possível validar o LDAPS. Confira certificado, CA e conta de serviço.'
+    }
     if (!$baseDn) { $config.BaseDn = [string]($resolved | Select-Object -Last 1) }
 
     if ($thumb) {
