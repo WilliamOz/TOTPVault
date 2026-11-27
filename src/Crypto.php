@@ -1,32 +1,45 @@
 <?php
-// src/Crypto.php — AES-256-GCM encryption for TOTP secrets
+declare(strict_types=1);
 
-class Crypto {
-private static function key(): string {
-    $cfg = require __DIR__ . '/../config/config.php';
-    $key = $cfg['encryption_key'];
-    // Pad or trim to exactly 32 bytes
-    return substr(str_pad($key, 32, "\0"), 0, 32);
-}
+final class Crypto {
+    private const PREFIX = 'v2:';
 
     public static function encrypt(string $plaintext): string {
-        $key    = self::key();
-        $iv     = random_bytes(12); // 96-bit nonce for GCM
-        $tag    = '';
-        $cipher = openssl_encrypt($plaintext, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
-        if ($cipher === false) throw new RuntimeException('Encryption failed.');
-        // Store: base64(iv || tag || ciphertext)
-        return base64_encode($iv . $tag . $cipher);
+        $cfg = require __DIR__ . '/../config/config.php';
+        $iv = random_bytes(12);
+        $tag = '';
+        $cipher = openssl_encrypt($plaintext, 'aes-256-gcm', self::key($cfg), OPENSSL_RAW_DATA, $iv, $tag, '', 16);
+        if ($cipher === false) {
+            throw new RuntimeException('Encryption failed.');
+        }
+        return self::PREFIX . base64_encode($iv . $tag . $cipher);
     }
 
     public static function decrypt(string $encoded): string {
-        $key  = self::key();
-        $raw  = base64_decode($encoded);
-        $iv   = substr($raw, 0, 12);
-        $tag  = substr($raw, 12, 16);
-        $data = substr($raw, 28);
-        $plain = openssl_decrypt($data, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
-        if ($plain === false) throw new RuntimeException('Decryption failed — data may be tampered.');
+        $cfg = require __DIR__ . '/../config/config.php';
+        $versioned = str_starts_with($encoded, self::PREFIX);
+        $raw = base64_decode($versioned ? substr($encoded, strlen(self::PREFIX)) : $encoded, true);
+        if ($raw === false || strlen($raw) <= 28) {
+            throw new RuntimeException('Invalid encrypted token.');
+        }
+        $key = self::key($cfg);
+        if (!$versioned) {
+            $legacy = $cfg['legacy_encryption_key'] ?: $cfg['encryption_key'];
+            $key = substr(str_pad($legacy, 32, "\0"), 0, 32);
+        }
+        $plain = openssl_decrypt(substr($raw, 28), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr($raw, 0, 12), substr($raw, 12, 16));
+        if ($plain === false) {
+            throw new RuntimeException('Decryption failed.');
+        }
         return $plain;
+    }
+
+    private static function key(array $cfg): string {
+        $key = base64_decode($cfg['encryption_key'], true);
+        if ($key === false || strlen($key) !== 32
+            || $cfg['encryption_key'] === 'K7gNU3sdo+OL0wNhqoVWhr3g6s1xYv72ol/pe/Unols=') {
+            throw new RuntimeException('Configure a unique 32-byte encryption key encoded in Base64.');
+        }
+        return $key;
     }
 }

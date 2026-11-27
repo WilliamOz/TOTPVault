@@ -22,11 +22,16 @@
         "url": { "type": "string" }
       }
     },
-    "session": {
+    "ad": {
       "type": "object",
       "properties": {
-        "cookieName": { "type": "string" },
-        "lifetime": { "type": "integer", "minimum": 1 }
+        "host": { "type": "string" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "baseDn": { "type": "string" },
+        "bindDn": { "type": "string" },
+        "accessGroupDn": { "type": "string" },
+        "adminGroupDn": { "type": "string" },
+        "caSecret": { "type": "string" }
       }
     },
     "secrets": {
@@ -36,11 +41,7 @@
         "dbPassword": { "type": "string" },
         "dbRootPassword": { "type": "string" },
         "encryptionKey": { "type": "string" },
-        "mailersendKey": { "type": "string" },
-        "googleClientSecret": { "type": "string" },
-        "microsoftClientSecret": { "type": "string" },
-        "githubClientSecret": { "type": "string" },
-        "keycloakClientSecret": { "type": "string" }
+        "adBindPassword": { "type": "string" }
       }
     },
     "mariadb": {

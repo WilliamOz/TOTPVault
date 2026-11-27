@@ -67,17 +67,31 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if .Values.persistence.sessions.enabled }}
+          {{- if or .Values.persistence.sessions.enabled .Values.ad.caSecret }}
           volumeMounts:
+            {{- if .Values.ad.caSecret }}
+            - name: ad-ca
+              mountPath: /run/totpvault
+              readOnly: true
+            {{- end }}
+            {{- if .Values.persistence.sessions.enabled }}
             - name: sessions
               mountPath: /var/www/html/sessions
+            {{- end }}
           {{- end }}
-      {{- if .Values.persistence.sessions.enabled }}
+      {{- if or .Values.persistence.sessions.enabled .Values.ad.caSecret }}
       volumes:
+        {{- if .Values.ad.caSecret }}
+        - name: ad-ca
+          secret:
+            secretName: {{ .Values.ad.caSecret | quote }}
+        {{- end }}
+        {{- if .Values.persistence.sessions.enabled }}
         - name: sessions
           persistentVolumeClaim:
             claimName: {{ .Values.persistence.sessions.existingClaim | default (printf "%s-sessions" (include "totpvault.fullname" .)) }}
       {{- end }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

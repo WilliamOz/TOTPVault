@@ -1,4 +1,5 @@
 <?php
+if (!defined('BASE_DIR')) { http_response_code(404); exit; }
 // tools/import-google-auth.php — Google Authenticator migration QR importer
 // Included by index.php after auth check — $user, csrf_token(), verify_csrf(),
 // jsonResponse(), BASE_DIR and all src classes are already available.
@@ -11,7 +12,7 @@ function proto_read_varint(string $data, int &$pos): int {
     $result = 0;
     $shift  = 0;
     do {
-        if ($pos >= strlen($data)) throw new RuntimeException('Unexpected end of protobuf data');
+        if ($pos >= strlen($data) || $shift >= 63) throw new RuntimeException('Unexpected end of protobuf data');
         $byte    = ord($data[$pos++]);
         $result |= ($byte & 0x7F) << $shift;
         $shift  += 7;
@@ -21,6 +22,7 @@ function proto_read_varint(string $data, int &$pos): int {
 
 function proto_read_bytes(string $data, int &$pos): string {
     $len = proto_read_varint($data, $pos);
+    if ($len > strlen($data) - $pos) throw new RuntimeException('Invalid protobuf length');
     $out = substr($data, $pos, $len);
     $pos += $len;
     return $out;
@@ -32,7 +34,7 @@ function proto_read_bytes(string $data, int &$pos): string {
  */
 function decode_ga_migration(string $base64Data): array {
     // The data param is URL-encoded base64
-    $raw = base64_decode($base64Data);
+    $raw = base64_decode($base64Data, true);
     if ($raw === false) throw new RuntimeException('Invalid base64 data in migration URI.');
 
     $accounts = [];
@@ -138,9 +140,9 @@ function decode_otp_parameters(string $data): array {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     verify_csrf();
-    $input = json_decode(file_get_contents('php://input'), true) ?? [];
+    $input = requestObject();
 
-    if (empty($input['data'])) {
+    if (!is_string($input['data'] ?? null) || $input['data'] === '') {
         jsonResponse(['error' => 'Missing data parameter'], 400);
     }
 
@@ -158,8 +160,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Page ───────────────────────────────────────────────────────────────────
 $pageTitle = 'Import from Google Authenticator — TOTPVault';
 $csrfToken = csrf_token();
-$avatar    = $user['avatar_url'] ? htmlspecialchars($user['avatar_url']) : null;
-$initial   = strtoupper(substr($user['name'] ?? $user['email'], 0, 1));
 
 require BASE_DIR . '/templates/layout.php';
 ?>
@@ -274,17 +274,17 @@ require BASE_DIR . '/templates/layout.php';
 
     <!-- Right: dropzone -->
     <div id="dropzone" class="dropzone"
-      onclick="document.getElementById('file-input').click()"
-      ondragover="event.preventDefault();this.classList.add('drag')"
-      ondragleave="this.classList.remove('drag')"
-      ondrop="handleDrop(event)">
+
+
+
+>
       <div class="dropzone-icon"><i class="fa-solid fa-qrcode"></i></div>
       <div class="dropzone-title">Drop export QR here</div>
       <div class="dropzone-hint">or click to choose · Ctrl+V to paste</div>
     </div>
   </div>
 
-  <input type="file" id="file-input" accept="image/*" style="display:none" onchange="handleFile(this.files[0])">
+  <input type="file" id="file-input" accept="image/*" style="display:none">
   <canvas id="decode-canvas" style="display:none;position:absolute;opacity:0;pointer-events:none"></canvas>
 
   <!-- Review area (shown after decode) -->
@@ -292,8 +292,8 @@ require BASE_DIR . '/templates/layout.php';
     <div class="review-header">
       <h2 id="review-title">Accounts found</h2>
       <div class="review-actions">
-        <button class="btn btn-ghost btn-sm" onclick="toggleAll(true)">Select all</button>
-        <button class="btn btn-ghost btn-sm" onclick="toggleAll(false)">Deselect all</button>
+        <button class="btn btn-ghost btn-sm" id="select-all">Select all</button>
+        <button class="btn btn-ghost btn-sm" id="deselect-all">Deselect all</button>
       </div>
     </div>
 
@@ -320,7 +320,7 @@ require BASE_DIR . '/templates/layout.php';
 
     <div class="import-footer">
       <div class="import-summary" id="import-summary"></div>
-      <button class="btn btn-primary" id="import-btn" onclick="importSelected()">
+      <button class="btn btn-primary" id="import-btn">
         <i class="fa-solid fa-file-import"></i>
         Import selected
       </button>
@@ -329,7 +329,7 @@ require BASE_DIR . '/templates/layout.php';
 
 </div>
 
-<script>
+<script nonce="<?= h(CSP_NONCE) ?>">
 const CSRF = <?= json_encode($csrfToken) ?>;
 let decodedAccounts = [];
 
@@ -431,7 +431,7 @@ function appendAccounts(accounts) {
     const tr = document.createElement('tr');
     tr.id = `row-${idx}`;
     tr.innerHTML = `
-      <td><input type="checkbox" id="chk-${idx}" ${isHotp ? '' : 'checked'} style="width:15px;height:15px;cursor:pointer" onchange="updateSummary()"></td>
+      <td><input type="checkbox" id="chk-${idx}" ${isHotp ? '' : 'checked'} style="width:15px;height:15px;cursor:pointer"></td>
       <td>
         <div class="account-name">${esc(a.name || '(unnamed)')}</div>
         ${a.issuer ? `<div class="account-issuer">${esc(a.issuer)}</div>` : ''}
@@ -551,11 +551,30 @@ function toast(msg, type = 'success') {
   const icons = { success: '✓', error: '✕', info: 'ℹ' };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span class="toast-icon">${icons[type] || 'ℹ'}</span><span>${msg}</span>`;
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.textContent = icons[type] || 'ℹ';
+  const message = document.createElement('span');
+  message.textContent = msg;
+  el.append(icon, message);
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => { el.style.animation = 'toastOut .2s ease forwards'; setTimeout(() => el.remove(), 200); }, 4000);
 }
 
+const dropZone = document.querySelector('.dropzone');
+const fileInput = document.getElementById('file-input');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', event => {
+  event.preventDefault();
+  dropZone.classList.add('drag');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', handleDrop);
+fileInput.addEventListener('change', event => handleFile(event.target.files[0]));
+document.getElementById('select-all').addEventListener('click', () => toggleAll(true));
+document.getElementById('deselect-all').addEventListener('click', () => toggleAll(false));
+document.getElementById('import-btn').addEventListener('click', importSelected);
+document.getElementById('account-tbody').addEventListener('change', updateSummary);
 updateSummary();
 </script>
 </body>

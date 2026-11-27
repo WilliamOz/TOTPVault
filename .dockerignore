@@ -11,9 +11,8 @@ Makefile
 .env.*
 .env.example
 
-# Local configuration may contain production secrets. Docker Compose mounts
-# config/config.docker.php as config/config.php at runtime instead.
-config/config.php
+# Local certificates and configuration are mounted at runtime.
+local-config/
 
 # IDE
 .idea/

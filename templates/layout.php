@@ -3,14 +3,11 @@
 $appName = 'TOTPVault';
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title><?= htmlspecialchars($pageTitle ?? $appName) ?></title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
- <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -125,7 +122,10 @@ select.input{cursor:pointer}
 .empty-icon{font-size:2.5rem;margin-bottom:1rem}
 </style>
   <link rel="icon" type="image/png" href="/favicon.png?2">
-  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <link rel="stylesheet" href="/assets/fontawesome/css/all.min.css">
+  <?php if (in_array(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH), ['/dashboard', '/tools/import-google-auth'], true)): ?>
+    <script src="/assets/jsqr/dist/jsQR.js"></script>
+  <?php endif; ?>
 </head>
 <body>
 <div id="toast-container"></div>

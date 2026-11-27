@@ -2,8 +2,7 @@
 $pageTitle = 'Dashboard — TOTPVault';
 require __DIR__ . '/layout.php';
 $csrfToken = csrf_token();
-$avatar = $user['avatar_url'] ? htmlspecialchars($user['avatar_url']) : null;
-$initial = strtoupper(substr($user['name'] ?? $user['email'], 0, 1));
+$initial = strtoupper(substr($user['name'] ?? $user['ad_username'], 0, 1));
 
 
 $FA_BRAND_ICONS = [
@@ -81,7 +80,6 @@ $FA_SOLID_ICONS = [
 .otp-actions{display:flex;gap:.25rem}
 
 /* ── Shared badge ── */
-.shared-chip{display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .5rem;background:var(--amber-l);color:var(--amber);border-radius:999px;font-size:.6875rem;font-weight:600}
 
 /* ── Empty ── */
 .empty-card{text-align:center;padding:4rem 2rem;border:2px dashed var(--line);border-radius:var(--r3);color:var(--ink3)}
@@ -124,10 +122,6 @@ $FA_SOLID_ICONS = [
 .secret-row .input{font-family:'JetBrains Mono',monospace;font-size:.8125rem;letter-spacing:.05em}
 
 /* ── Share panel ── */
-.share-list{margin-top:1rem;display:flex;flex-direction:column;gap:.5rem}
-.share-row{display:flex;align-items:center;gap:.75rem;padding:.625rem .875rem;border:1px solid var(--line);border-radius:var(--r2);font-size:.875rem}
-.share-email{flex:1;min-width:0;truncate:true;font-weight:500}
-.share-status{font-size:.75rem;color:var(--ink4)}
 
 /* ── User menu ── */
 .user-menu-wrap{position:relative}
@@ -137,7 +131,7 @@ $FA_SOLID_ICONS = [
 .user-menu-item svg{width:15px;height:15px;color:var(--ink4)}
 .user-info{padding:.875rem 1rem;border-bottom:1px solid var(--line)}
 .user-info-name{font-weight:600;font-size:.875rem;truncate:true}
-.user-info-email{font-size:.75rem;color:var(--ink4);truncate:true}
+.user-info-account{font-size:.75rem;color:var(--ink4);truncate:true}
 
 /* ── Toggle ── */
 .toggle{position:relative;width:44px;height:24px;flex-shrink:0}
@@ -159,26 +153,25 @@ $FA_SOLID_ICONS = [
   </div>
   <div class="nav-spacer"></div>
   <div class="user-menu-wrap">
-    <button onclick="toggleUserMenu()" style="display:flex;align-items:center;gap:.625rem;background:none;border:1px solid var(--line);border-radius:var(--r2);padding:.375rem .75rem .375rem .375rem;cursor:pointer;font-size:.875rem;font-weight:500;color:var(--ink)">
+    <button data-action="user-menu" style="display:flex;align-items:center;gap:.625rem;background:none;border:1px solid var(--line);border-radius:var(--r2);padding:.375rem .75rem .375rem .375rem;cursor:pointer;font-size:.875rem;font-weight:500;color:var(--ink)">
       <div class="avatar">
-        <?php if ($avatar): ?>
-          <img src="<?= $avatar ?>" alt="avatar" style="width:100%;height:100%;object-fit:cover">
-        <?php else: ?>
-          <?= $initial ?>
-        <?php endif; ?>
+        <?= h($initial) ?>
       </div>
-      <?= htmlspecialchars(explode(' ', $user['name'] ?? $user['email'])[0]) ?>
+      <?= htmlspecialchars(explode(' ', $user['name'] ?? $user['ad_username'])[0]) ?>
       <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
     </button>
     <div class="user-menu hidden" id="user-menu">
       <div class="user-info">
         <div class="user-info-name"><?= htmlspecialchars($user['name'] ?? '') ?></div>
-        <div class="user-info-email"><?= htmlspecialchars($user['email']) ?></div>
+        <div class="user-info-account"><?= htmlspecialchars($user['ad_username']) ?></div>
       </div>
-      <a href="/auth/logout" class="user-menu-item">
-        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Sign out
-      </a>
+      <?php if ($user['is_admin']): ?>
+      <a href="/admin/users" class="user-menu-item">Administrar usuários</a>
+      <?php endif; ?>
+      <form method="post" action="/auth/logout">
+        <input type="hidden" name="_csrf" value="<?= h($csrfToken) ?>">
+        <button class="btn btn-ghost user-menu-item" type="submit">Sair</button>
+      </form>
     </div>
   </div>
 </nav>
@@ -187,54 +180,35 @@ $FA_SOLID_ICONS = [
 <div class="dash-layout">
   <aside class="sidebar">
     <div class="sidebar-section">Tokens</div>
-    <button class="sidebar-link active" onclick="filterProfiles('all')">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-      All tokens
-      <span class="sidebar-profile-count" id="count-all"><?= count($profiles) ?></span>
-    </button>
-    <button class="sidebar-link" onclick="filterProfiles('mine')">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-      My tokens
-      <span class="sidebar-profile-count" id="count-mine"><?= count(array_filter($profiles, fn($p)=>$p['is_owner'])) ?></span>
-    </button>
-    <button class="sidebar-link" onclick="filterProfiles('shared')">
-      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-      Shared with me
-      <span class="sidebar-profile-count" id="count-shared"><?= count(array_filter($profiles, fn($p)=>!$p['is_owner'])) ?></span>
-    </button>
- 
+
 	<div style="margin-top:auto;padding:.5rem .75rem;display:flex;flex-direction:column;gap:.5rem">
       <a href="/tools/import-google-auth" class="sidebar-link" style="font-size:.8125rem;color:var(--ink4)">
         <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        Import from Google Auth
+        Importar do Google Authenticator
       </a>
-      <a href="/api/export-profiles" class="sidebar-link" style="font-size:.8125rem;color:var(--ink4)" title="Export editable profiles as CSV with decrypted seeds">
-        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export profiles
-      </a>
-      <button class="btn btn-primary w-full" onclick="openAddModal()">
+      <button class="btn btn-primary w-full" data-action="add">
         <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add token
+        Adicionar token
       </button>
     </div>
-	
+
   </aside>
 
   <main class="main">
     <div class="topbar">
-      <h1 id="view-title">All tokens</h1>
-      <button class="btn btn-primary" onclick="openAddModal()" style="display:none" id="mob-add-btn">
+      <h1 id="view-title">Meus tokens</h1>
+      <button class="btn btn-primary" data-action="add" style="display:none" id="mob-add-btn">
         <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add token
+        Adicionar token
       </button>
     </div>
 
     <?php if (empty($profiles)): ?>
     <div class="empty-card">
       <div class="icon">🔒</div>
-      <h2>No tokens yet</h2>
-      <p>Add your first TOTP token to get started. Your secret keys are encrypted and never leave the server.</p>
-      <button class="btn btn-primary btn-lg" onclick="openAddModal()">Add your first token</button>
+      <h2>Você ainda não tem tokens</h2>
+      <p>Adicione seu primeiro token TOTP. O cofre armazena as chaves de forma criptografada.</p>
+      <button class="btn btn-primary btn-lg" data-action="add">Adicionar primeiro token</button>
     </div>
     <?php else: ?>
     <div class="profiles-grid" id="profiles-grid">
@@ -243,16 +217,14 @@ $FA_SOLID_ICONS = [
         $pId     = (int)$p['id'];
         $pName   = htmlspecialchars($p['name']);
         $pIssuer = htmlspecialchars($p['issuer'] ?? '');
-        $pColor  = htmlspecialchars($p['color']);
+        $pColor  = preg_match('/\A#[a-f0-9]{6}\z/i', $p['color'] ?? '') ? $p['color'] : '#6366f1';
         $pAlgo   = htmlspecialchars($p['algorithm']);
         $pDigits = (int)$p['digits'];
         $pPeriod = (int)$p['period'];
-        $isOwner = (bool)$p['is_owner'];
-        $canEdit = (bool)$p['can_edit'];
         $pHide   = (int)($p['hide_code'] ?? 0);
         $pIcon   = htmlspecialchars($p['icon'] ?? 'fa-shield-halved');
       ?>
-      <div class="otp-card" data-id="<?= $pId ?>" data-owner="<?= $isOwner?'1':'0' ?>" data-hide="<?= $pHide ?>">
+      <div class="otp-card" data-id="<?= $pId ?>" data-hide="<?= $pHide ?>">
         <div class="otp-card-header">
           <div class="otp-card-color" style="background:<?= $pColor ?>"></div>
           <div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:<?= $pColor ?>">
@@ -264,19 +236,13 @@ $FA_SOLID_ICONS = [
             <div class="otp-card-issuer truncate"><?= $pIssuer ?></div>
             <?php endif; ?>
           </div>
-          <?php if (!$isOwner): ?>
-          <span class="shared-chip">
-            <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
-            Shared
-          </span>
-          <?php endif; ?>
         </div>
         <div class="otp-card-body">
           <div class="otp-code-wrap">
-            <div class="otp-code" id="code-<?= $pId ?>" onclick="copyCode(<?= $pId ?>)" title="<?= $pHide ? 'Click to reveal' : 'Click to copy' ?>">
+            <div class="otp-code" id="code-<?= $pId ?>" data-action="copy" data-id="<?= $pId ?>" title="<?= $pHide ? 'Click to reveal' : 'Click to copy' ?>">
               <span class="dots">••••••</span>
             </div>
-            <button class="otp-copy-btn" onclick="copyCode(<?= $pId ?>)">
+            <button class="otp-copy-btn" data-action="copy" data-id="<?= $pId ?>">
               <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
               <?= $pHide ? 'Reveal' : 'Copy' ?>
             </button>
@@ -299,21 +265,12 @@ $FA_SOLID_ICONS = [
             <span><?= $pPeriod ?>s</span>
           </div>
           <div class="otp-actions">
-            <?php if ($isOwner): ?>
-            <button class="btn btn-ghost btn-icon btn-sm" title="Share" onclick="openShareModal(<?= $pId ?>, '<?= $pName ?>')">
-              <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
-            </button>
-            <?php endif; ?>
-            <?php if ($canEdit): ?>
-            <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openEditModal(<?= $pId ?>)">
+            <button class="btn btn-ghost btn-icon btn-sm" title="Edit" data-action="edit" data-id="<?= $pId ?>">
               <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
-            <?php endif; ?>
-            <?php if ($isOwner): ?>
-            <button class="btn btn-ghost btn-icon btn-sm" title="Delete" onclick="deleteProfile(<?= $pId ?>, '<?= $pName ?>')" style="color:var(--red)">
+            <button class="btn btn-ghost btn-icon btn-sm" title="Delete" data-action="delete" data-id="<?= $pId ?>" data-name="<?= $pName ?>" style="color:var(--red)">
               <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
             </button>
-            <?php endif; ?>
           </div>
         </div>
       </div>
@@ -328,10 +285,10 @@ $FA_SOLID_ICONS = [
   <div class="modal">
     <div class="modal-header">
       <div>
-        <h2 class="text-xl font-bold" id="modal-title">Add token</h2>
+        <h2 class="text-xl font-bold" id="modal-title">Adicionar token</h2>
         <p class="text-sm text-ink3" style="margin-top:.25rem">Enter your TOTP secret key and settings</p>
       </div>
-      <button class="btn btn-ghost btn-icon" onclick="closeModal('profile-modal')">
+      <button class="btn btn-ghost btn-icon" data-action="close">
         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
@@ -341,8 +298,8 @@ $FA_SOLID_ICONS = [
 
       <!-- Mobile tabs (hidden on desktop) -->
       <div class="mob-tabs">
-        <button class="mob-tab active" onclick="switchTab(0)"><i class="fa-solid fa-key" style="margin-right:.375rem"></i>Token</button>
-        <button class="mob-tab" onclick="switchTab(1)"><i class="fa-solid fa-palette" style="margin-right:.375rem"></i>Appearance</button>
+        <button class="mob-tab active" data-action="token-tab"><i class="fa-solid fa-key" style="margin-right:.375rem"></i>Token</button>
+        <button class="mob-tab" data-action="appearance-tab"><i class="fa-solid fa-palette" style="margin-right:.375rem"></i>Appearance</button>
       </div>
 
       <div class="form-2col">
@@ -366,10 +323,10 @@ $FA_SOLID_ICONS = [
 <div class="field">
             <div class="secret-row">
               <input class="input" id="f-secret" placeholder="Base32 secret…" style="flex:1">
-              <button class="btn btn-secondary btn-sm" onclick="generateSecret()" title="Generate random secret">
+              <button class="btn btn-secondary btn-sm" data-action="generate" title="Generate random secret">
                 <i class="fa-solid fa-rotate"></i>
               </button>
-              <button class="btn btn-secondary btn-sm" onclick="toggleQrPanel()" title="Scan QR code">
+              <button class="btn btn-secondary btn-sm" data-action="qr-panel" title="Scan QR code">
                 <i class="fa-solid fa-qrcode"></i>
               </button>
             </div>
@@ -380,10 +337,10 @@ $FA_SOLID_ICONS = [
           <div id="qr-panel" style="display:none;max-height:200px;overflow-y:auto;padding:.875rem;background:var(--bg2);border:1px solid var(--line);border-radius:var(--r2)">
             <div style="display:flex;flex-direction:column;gap:.625rem">
               <div id="qr-dropzone"
-                onclick="document.getElementById('qr-file').click()"
-                ondragover="event.preventDefault();this.style.borderColor='var(--blue)'"
-                ondragleave="this.style.borderColor='var(--line)'"
-                ondrop="handleQrDrop(event)"
+                data-action="qr-file"
+
+
+
                 style="width:100%;padding:.625rem 1rem;border:2px dashed var(--line);border-radius:var(--r2);cursor:pointer;transition:border-color .15s;display:flex;align-items:center;justify-content:center;gap:.625rem">
                 <i class="fa-solid fa-qrcode" style="color:var(--ink4);font-size:1.1rem"></i>
                 <div>
@@ -394,7 +351,7 @@ $FA_SOLID_ICONS = [
               <canvas id="qr-canvas" style="display:none;position:absolute;pointer-events:none;opacity:0"></canvas>
               <div id="qr-result" style="display:none;padding:.625rem .875rem;border-radius:var(--r);font-size:.8125rem"></div>
             </div>
-            <input type="file" id="qr-file" accept="image/*" style="display:none" onchange="handleQrFile(this.files[0])">
+            <input type="file" id="qr-file" accept="image/*" style="display:none">
           </div>
 
           <div class="form-section">TOTP settings</div>
@@ -447,7 +404,7 @@ $FA_SOLID_ICONS = [
 
           <div class="field">
             <label class="label">Icon</label>
-            <input class="input" id="icon-search" placeholder="Search: google, github, apple..." oninput="filterIcons(this.value)" autocomplete="off">
+            <input class="input" id="icon-search" placeholder="Search: google, github, apple..." autocomplete="off">
             <div id="icon-grid" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;max-height:260px;overflow-y:auto;padding:2px 0"></div>
             <input type="hidden" id="f-icon" value="fa-shield-halved">
             <input type="hidden" id="f-icon-prefix" value="fa-brands">
@@ -458,45 +415,13 @@ $FA_SOLID_ICONS = [
     </div>
 
     <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('profile-modal')">Cancel</button>
-      <button class="btn btn-primary" id="save-btn" onclick="saveProfile()">Save token</button>
+      <button class="btn btn-secondary" data-action="close">Cancel</button>
+      <button class="btn btn-primary" id="save-btn" data-action="save">Save token</button>
     </div>
   </div>
 </div>
 
-<!-- ── Share Modal ── -->
-<div id="share-modal" class="modal-backdrop hidden">
-  <div class="modal" style="max-width:480px">
-    <div class="modal-header">
-      <div>
-        <h2 class="text-xl font-bold">Share token</h2>
-        <p class="text-sm text-ink3" style="margin-top:.25rem" id="share-modal-sub">Collaborators can view OTP codes without seeing the secret.</p>
-      </div>
-      <button class="btn btn-ghost btn-icon" onclick="closeModal('share-modal')">
-        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </div>
-    <div class="modal-body">
-      <input type="hidden" id="share-profile-id">
-      <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
-        <input class="input" id="share-email" type="email" placeholder="colleague@company.com" style="flex:1">
-        <button class="btn btn-primary" onclick="addShare()">Invite</button>
-      </div>
-      <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;cursor:pointer;margin-bottom:1rem">
-        <input type="checkbox" id="share-can-edit" style="width:16px;height:16px">
-        Allow editing token settings
-      </label>
-      <div id="share-list-wrap">
-        <div class="text-sm text-ink4">Loading shares…</div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('share-modal')">Done</button>
-    </div>
-  </div>
-</div>
-
-<script>
+<script nonce="<?= h(CSP_NONCE) ?>">
 const CSRF = <?= json_encode($csrfToken) ?>;
 const COLORS = ['#6366f1','#3b82f6','#06b6d4','#10b981','#84cc16','#f59e0b','#f97316','#ef4444','#ec4899','#8b5cf6','#0ea5e9','#14b8a6','#22c55e','#eab308','#f43f5e','#6b7280'];
 
@@ -504,7 +429,7 @@ const COLORS = ['#6366f1','#3b82f6','#06b6d4','#10b981','#84cc16','#f59e0b','#f9
 function initColorGrid(selected) {
   const g = document.getElementById('color-grid');
   g.innerHTML = COLORS.map(c =>
-    `<div class="color-swatch ${c===selected?'selected':''}" style="background:${c}" data-color="${c}" onclick="selectColor('${c}')"></div>`
+    `<div class="color-swatch ${c===selected?'selected':''}" style="background:${c}" data-color="${c}" data-action="color"></div>`
   ).join('');
 }
 function selectColor(c) {
@@ -517,8 +442,9 @@ const REFRESH_INTERVAL = 1000;
 
 async function fetchOTP(id) {
   const r = await fetch(`/api/otp?id=${id}`);
+  if (r.status === 401) location.replace('/');
+  if (!r.ok) return null;
   const d = await r.json();
-  if (d.error) return null;
   return d;
 }
 
@@ -629,7 +555,7 @@ function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
 function openAddModal() {
   document.getElementById('edit-id').value = '';
-  document.getElementById('modal-title').textContent = 'Add token';
+  document.getElementById('modal-title').textContent = 'Adicionar token';
   document.getElementById('save-btn').textContent = 'Save token';
   document.getElementById('f-name').value = '';
   document.getElementById('f-issuer').value = '';
@@ -707,80 +633,14 @@ async function deleteProfile(id, name) {
   if (r.error) { toast(r.error, 'error'); return; }
   document.querySelector(`.otp-card[data-id="${id}"]`)?.remove();
   toast('Token deleted', 'success');
-  updateCounts();
+  clearInterval(refreshTimers[id]);
+  location.reload();
 }
 
 async function generateSecret() {
   const r = await fetch('/api/generate-secret');
   const d = await r.json();
   document.getElementById('f-secret').value = d.secret;
-}
-
-// ── Share modal ──
-async function openShareModal(id, name) {
-  document.getElementById('share-profile-id').value = id;
-  document.getElementById('share-modal-sub').textContent = `Sharing: ${name}`;
-  document.getElementById('share-email').value = '';
-  document.getElementById('share-modal').classList.remove('hidden');
-  await loadShares(id);
-}
-
-async function loadShares(id) {
-  const wrap = document.getElementById('share-list-wrap');
-  const r = await fetch(`/api/profiles/${id}/shares`);
-  const shares = await r.json();
-  if (!shares.length) {
-    wrap.innerHTML = '<div class="text-sm text-ink4" style="padding:.5rem 0">No shares yet. Invite someone above.</div>';
-    return;
-  }
-  wrap.innerHTML = `<div class="share-list">${shares.map(s => `
-    <div class="share-row">
-      <div class="avatar" style="width:28px;height:28px;font-size:.6875rem">${(s.user_name||s.shared_with_email).charAt(0).toUpperCase()}</div>
-      <div style="flex:1;min-width:0">
-        <div class="share-email truncate">${s.shared_with_email}</div>
-        <div class="share-status">${s.can_edit ? 'Can edit' : 'View only'} · ${s.shared_with_user_id ? 'Active' : 'Pending'}</div>
-      </div>
-      <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="removeShare(${id},'${s.shared_with_email}')">Remove</button>
-    </div>`).join('')}</div>`;
-}
-
-async function addShare() {
-  const id      = document.getElementById('share-profile-id').value;
-  const email   = document.getElementById('share-email').value.trim();
-  const canEdit = document.getElementById('share-can-edit').checked;
-  if (!email) { toast('Enter an email address', 'error'); return; }
-  const r = await apiFetch(`/api/profiles/${id}/shares`, 'POST', { email, can_edit: canEdit });
-  if (r.error) { toast(r.error, 'error'); return; }
-  toast(`Shared with ${email}`, 'success');
-  document.getElementById('share-email').value = '';
-  await loadShares(id);
-}
-
-async function removeShare(id, email) {
-  const r = await apiFetch(`/api/profiles/${id}/shares`, 'DELETE', { email });
-  if (r.error) { toast(r.error, 'error'); return; }
-  toast('Share removed', 'success');
-  await loadShares(id);
-}
-
-// ── Filtering ──
-function filterProfiles(type) {
-  document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
-  document.querySelectorAll('.sidebar-link')[['all','mine','shared'].indexOf(type)]?.classList.add('active');
-  const titles = {all:'All tokens', mine:'My tokens', shared:'Shared with me'};
-  document.getElementById('view-title').textContent = titles[type];
-  document.querySelectorAll('.otp-card').forEach(card => {
-    const owner = card.dataset.owner === '1';
-    const show  = type==='all' || (type==='mine' && owner) || (type==='shared' && !owner);
-    card.style.display = show ? '' : 'none';
-  });
-}
-
-function updateCounts() {
-  const cards = [...document.querySelectorAll('.otp-card')];
-  document.getElementById('count-all').textContent    = cards.length;
-  document.getElementById('count-mine').textContent   = cards.filter(c=>c.dataset.owner==='1').length;
-  document.getElementById('count-shared').textContent = cards.filter(c=>c.dataset.owner!=='1').length;
 }
 
 // ── User menu ──
@@ -804,7 +664,12 @@ function toast(msg, type='success') {
   const icons = { success:'✓', error:'✕', info:'ℹ' };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<span class="toast-icon">${icons[type]||'ℹ'}</span><span>${msg}</span>`;
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.textContent = icons[type] || 'ℹ';
+  const message = document.createElement('span');
+  message.textContent = msg;
+  el.append(icon, message);
   document.getElementById('toast-container').appendChild(el);
   setTimeout(() => { el.style.animation='toastOut .2s ease forwards'; setTimeout(()=>el.remove(),200); }, 3000);
 }
@@ -832,7 +697,7 @@ function renderIcons(filter) {
 
 function iconBtn(icon, prefix, current) {
   const sel = current === icon;
-  return `<button type="button" onclick="selectIcon('${icon}','${prefix}')" title="${icon.replace('fa-','')}"
+  return `<button type="button" data-action="icon" data-icon="${icon}" data-prefix="${prefix}" title="${icon.replace('fa-','')}"
     style="width:34px;height:34px;border-radius:7px;border:1px solid var(--line);
            background:${sel?'var(--blue-l)':'var(--bg2)'};color:${sel?'var(--blue)':'var(--ink3)'};
            cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.95rem;transition:all .15s">
@@ -946,6 +811,32 @@ function switchTab(idx) {
 // Init
 initColorGrid('#6366f1');
 initAllCards();
+
+const actions = {
+  'user-menu': toggleUserMenu, add: openAddModal, save: saveProfile,
+  copy: el => copyCode(Number(el.dataset.id)),
+  edit: el => openEditModal(Number(el.dataset.id)),
+  delete: el => deleteProfile(Number(el.dataset.id), el.dataset.name),
+  close: () => closeModal('profile-modal'),
+  'token-tab': () => switchTab(0), 'appearance-tab': () => switchTab(1),
+  generate: generateSecret, 'qr-panel': toggleQrPanel,
+  'qr-file': () => document.getElementById('qr-file').click(),
+  color: el => selectColor(el.dataset.color),
+  icon: el => selectIcon(el.dataset.icon, el.dataset.prefix),
+};
+document.addEventListener('click', event => {
+  const el = event.target.closest('[data-action]');
+  if (el && Object.hasOwn(actions, el.dataset.action)) actions[el.dataset.action](el);
+});
+const dropZone = document.querySelector('[data-action="qr-file"]');
+dropZone.addEventListener('dragover', event => {
+  event.preventDefault();
+  dropZone.style.borderColor = 'var(--blue)';
+});
+dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--line)'; });
+dropZone.addEventListener('drop', handleQrDrop);
+document.getElementById('qr-file').addEventListener('change', event => handleQrFile(event.target.files[0]));
+document.getElementById('icon-search').addEventListener('input', event => filterIcons(event.target.value));
 </script>
 
 </body>

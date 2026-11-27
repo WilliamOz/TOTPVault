@@ -1,226 +1,156 @@
 <?php
-// src/Auth.php
+declare(strict_types=1);
 
-class Auth {
+final class Auth {
     private PDO $db;
-    private array $cfg;
 
-    public function __construct() {
-        $this->db  = Database::getInstance();
-        $this->cfg = require __DIR__ . '/../config/config.php';
+    public function __construct(private ActiveDirectory $directory, private array $session) {
+        $this->db = Database::getInstance();
     }
 
-    // ── Session management ─────────────────────────────────────────────────
+    public static function startSession(array $session, bool $secure): void {
+        ini_set('session.use_strict_mode', '1');
+        ini_set('session.use_only_cookies', '1');
+        session_name($session['cookie_name']);
+        session_set_cookie_params([
+            'lifetime' => 0,
+            'path' => '/',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+        session_start();
+    }
 
-    public function startSession(): void {
-        if (session_status() === PHP_SESSION_NONE) {
-            $cookieName = $this->cfg['session']['cookie_name'];
-            session_name($cookieName);
-            session_set_cookie_params([
-                'lifetime' => $this->cfg['session']['lifetime'],
-                'path'     => '/',
-                'secure'   => isset($_SERVER['HTTPS']),
-                'httponly' => true,
-                'samesite' => 'Lax',
-            ]);
-            session_start();
+    public function currentUser(bool $requireFreshDirectoryCheck = false): ?array {
+        if (!isset($_SESSION['user_id'])) {
+            return null;
         }
-    }
-
-    public function currentUser(): ?array {
-        $this->startSession();
-        if (empty($_SESSION['user_id'])) return null;
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE id = ?');
+        $stmt = $this->db->prepare('SELECT id, ad_guid, ad_username, name, disabled_at, auth_version FROM users WHERE id = ?');
         $stmt->execute([$_SESSION['user_id']]);
-        return $stmt->fetch() ?: null;
-    }
-
-    public function requireLogin(): array {
-        $user = $this->currentUser();
-        if (!$user) {
-            header('Location: /');
-            exit;
+        $user = $stmt->fetch();
+        $now = time();
+        if (!$user || $user['ad_guid'] === null || $user['disabled_at'] !== null
+            || (int)$user['auth_version'] !== ($_SESSION['auth_version'] ?? null)
+            || $now >= ($_SESSION['issued_at'] ?? 0) + $this->session['lifetime']) {
+            $this->logout();
+            return null;
         }
+        if ($requireFreshDirectoryCheck || $now >= $_SESSION['directory_checked_at'] + 60) {
+            $identity = $this->directory->refresh($user['ad_guid']);
+            if ($identity === null) {
+                $this->logout();
+                return null;
+            }
+            $_SESSION['is_admin'] = $identity['admin'];
+            $_SESSION['directory_checked_at'] = $now;
+        }
+        $user['is_admin'] = $_SESSION['is_admin'] ?? false;
         return $user;
     }
 
-    public function loginUser(int $userId): void {
-        $this->startSession();
-        session_regenerate_id(true);
-        $_SESSION['user_id'] = $userId;
+    public function login(array $identity): bool {
+        $stmt = $this->db->prepare(
+            'INSERT INTO users (ad_guid, ad_username, name) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE ad_username = ?, name = ?'
+        );
+        $stmt->execute([$identity['guid'], $identity['username'], $identity['name'], $identity['username'], $identity['name']]);
+        $stmt = $this->db->prepare('SELECT id, disabled_at, auth_version FROM users WHERE ad_guid = ?');
+        $stmt->execute([$identity['guid']]);
+        $user = $stmt->fetch();
+        if (!$user || $user['disabled_at'] !== null) {
+            return false;
+        }
+        if (!session_regenerate_id(true)) {
+            throw new RuntimeException('Session renewal failed.');
+        }
+        $_SESSION = [
+            'user_id' => (int)$user['id'],
+            'auth_version' => (int)$user['auth_version'],
+            'is_admin' => $identity['admin'],
+            'issued_at' => time(),
+            'directory_checked_at' => time(),
+        ];
+        return true;
     }
 
     public function logout(): void {
-        $this->startSession();
+        $params = session_get_cookie_params();
+        $_SESSION = [];
         session_destroy();
-        setcookie($this->cfg['session']['cookie_name'], '', time() - 3600, '/');
+        setcookie(session_name(), '', [
+            'expires' => 1,
+            'path' => $params['path'],
+            'secure' => $params['secure'],
+            'httponly' => $params['httponly'],
+            'samesite' => $params['samesite'],
+        ]);
     }
 
-    // ── User upsert ────────────────────────────────────────────────────────
-
-    public function findOrCreateUser(array $data): array {
-        // $data: email, name, avatar_url, provider, provider_id
-        $provider   = $this->normalizeProviderName($data['provider'] ?? '');
-        $providerId = (string)($data['provider_id'] ?? '');
-        $email      = strtolower(trim((string)($data['email'] ?? '')));
-
-        if ($providerId === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            throw new RuntimeException('OAuth provider returned incomplete user information.');
-        }
-
+    public function allowLoginAttempt(string $username, string $clientAddress): bool {
+        $window = intdiv(time(), 300);
+        $increment = $this->db->prepare(
+            'INSERT INTO login_attempts (bucket, window_id, attempts) VALUES (?, ?, 1)
+             ON DUPLICATE KEY UPDATE attempts = IF(window_id = VALUES(window_id), LEAST(attempts + 1, 1000), 1),
+             window_id = VALUES(window_id)'
+        );
+        $count = $this->db->prepare('SELECT attempts FROM login_attempts WHERE bucket = ?');
         $this->db->beginTransaction();
         try {
-            $user = $this->findUserByOAuthIdentity($provider, $providerId)
-                ?? $this->findUserByLegacyProviderColumn($provider, $providerId)
-                ?? $this->findByEmail($email);
-
-            if ($user) {
-                $stmt = $this->db->prepare(
-                    'UPDATE users SET name = COALESCE(?, name),
-                     avatar_url = COALESCE(?, avatar_url), updated_at = NOW()
-                     WHERE id = ?'
-                );
-                $stmt->execute([$data['name'] ?? null, $data['avatar_url'] ?? null, $user['id']]);
-                $userId = (int)$user['id'];
-            } else {
-                $stmt = $this->db->prepare(
-                    'INSERT INTO users (email, name, avatar_url) VALUES (?, ?, ?)'
-                );
-                $stmt->execute([$email, $data['name'] ?? null, $data['avatar_url'] ?? null]);
-                $userId = (int)$this->db->lastInsertId();
-                $this->resolvePendingShares($email, $userId);
+            $allowed = true;
+            foreach (['ip:' . $clientAddress => 60, 'user:' . strtolower($username) => 10] as $key => $limit) {
+                $bucket = hash('sha256', $key);
+                $increment->execute([$bucket, $window]);
+                $count->execute([$bucket]);
+                if ((int)$count->fetchColumn() > $limit) {
+                    $allowed = false;
+                    break;
+                }
             }
-
-            $this->upsertOAuthIdentity($userId, $provider, $providerId);
-            $this->updateLegacyProviderColumn($userId, $provider, $providerId);
-
             $this->db->commit();
-            $savedUser = $this->findById($userId);
-            if (!$savedUser) {
-                throw new RuntimeException('Failed to load authenticated user.');
-            }
-            return $savedUser;
         } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
+            $this->db->rollBack();
             throw $e;
         }
-    }
-
-    public function findById(int $id): ?array {
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE id = ?');
-        $stmt->execute([$id]);
-        return $stmt->fetch() ?: null;
-    }
-
-    private function findByEmail(string $email): ?array {
-        $stmt = $this->db->prepare('SELECT * FROM users WHERE email = ?');
-        $stmt->execute([$email]);
-        return $stmt->fetch() ?: null;
-    }
-
-    private function findUserByOAuthIdentity(string $provider, string $providerId): ?array {
-        if (!$this->tableExists('oauth_identities')) {
-            return null;
+        if (random_int(1, 100) === 1) {
+            $cleanup = $this->db->prepare('DELETE FROM login_attempts WHERE window_id < ? LIMIT 1000');
+            $cleanup->execute([$window - 2]);
         }
-
-        $stmt = $this->db->prepare(
-            'SELECT u.* FROM users u
-             INNER JOIN oauth_identities oi ON oi.user_id = u.id
-             WHERE oi.provider = ? AND oi.provider_id = ?
-             LIMIT 1'
-        );
-        $stmt->execute([$provider, $providerId]);
-        return $stmt->fetch() ?: null;
+        return $allowed;
     }
 
-    private function findUserByLegacyProviderColumn(string $provider, string $providerId): ?array {
-        $column = $this->legacyProviderColumn($provider);
-        if ($column === null) {
-            return null;
+    public function listUsers(): array {
+        return $this->db->query(
+            'SELECT id, ad_username, name, disabled_at FROM users WHERE ad_guid IS NOT NULL ORDER BY name, id'
+        )->fetchAll();
+    }
+
+    public function setDisabled(int $actor, int $target, bool $disabled): bool {
+        if ($actor === $target) {
+            return false;
         }
-
-        $stmt = $this->db->prepare("SELECT * FROM users WHERE {$column} = ? LIMIT 1");
-        $stmt->execute([$providerId]);
-        return $stmt->fetch() ?: null;
-    }
-
-    private function upsertOAuthIdentity(int $userId, string $provider, string $providerId): void {
-        if (!$this->tableExists('oauth_identities')) {
-            return;
+        // Check the actor and change the target under the same transaction as the audit event.
+        $this->db->beginTransaction();
+        try {
+            $lock = $this->db->prepare('SELECT id, disabled_at FROM users WHERE id IN (?, ?) AND ad_guid IS NOT NULL ORDER BY id FOR UPDATE');
+            $lock->execute([$actor, $target]);
+            $users = array_column($lock->fetchAll(), 'disabled_at', 'id');
+            if (count($users) !== 2 || $users[$actor] !== null) {
+                $this->db->rollBack();
+                return false;
+            }
+            if (($users[$target] !== null) !== $disabled) {
+                $value = $disabled ? 'UTC_TIMESTAMP()' : 'NULL';
+                $stmt = $this->db->prepare("UPDATE users SET disabled_at = {$value}, auth_version = auth_version + 1 WHERE id = ?");
+                $stmt->execute([$target]);
+                $stmt = $this->db->prepare('INSERT INTO user_access_audit (actor_id, target_id, action) VALUES (?, ?, ?)');
+                $stmt->execute([$actor, $target, $disabled ? 'disabled' : 'enabled']);
+            }
+            $this->db->commit();
+            return true;
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
         }
-
-        $stmt = $this->db->prepare(
-            'INSERT INTO oauth_identities (user_id, provider, provider_id)
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), updated_at = NOW()'
-        );
-        $stmt->execute([$userId, $provider, $providerId]);
-    }
-
-    private function updateLegacyProviderColumn(int $userId, string $provider, string $providerId): void {
-        $column = $this->legacyProviderColumn($provider);
-        if ($column === null) {
-            return;
-        }
-
-        $stmt = $this->db->prepare("UPDATE users SET {$column} = ? WHERE id = ?");
-        $stmt->execute([$providerId, $userId]);
-    }
-
-    private function normalizeProviderName(string $provider): string {
-        $provider = strtolower(trim($provider));
-        if (!preg_match('/^[a-z0-9_-]{1,64}$/', $provider)) {
-            throw new RuntimeException('Invalid OAuth provider name.');
-        }
-        return $provider;
-    }
-
-    private function legacyProviderColumn(string $provider): ?string {
-        $legacyColumns = [
-            'google'    => 'google_id',
-            'microsoft' => 'microsoft_id',
-            'github'    => 'github_id',
-        ];
-        $column = $legacyColumns[$provider] ?? null;
-        if ($column === null || !$this->columnExists('users', $column)) {
-            return null;
-        }
-        return $column;
-    }
-
-    private function tableExists(string $table): bool {
-        static $cache = [];
-        if (!array_key_exists($table, $cache)) {
-            $stmt = $this->db->prepare(
-                'SELECT COUNT(*) FROM information_schema.TABLES
-                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?'
-            );
-            $stmt->execute([$table]);
-            $cache[$table] = (int)$stmt->fetchColumn() > 0;
-        }
-        return $cache[$table];
-    }
-
-    private function columnExists(string $table, string $column): bool {
-        static $cache = [];
-        $key = "{$table}.{$column}";
-        if (!array_key_exists($key, $cache)) {
-            $stmt = $this->db->prepare(
-                'SELECT COUNT(*) FROM information_schema.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?'
-            );
-            $stmt->execute([$table, $column]);
-            $cache[$key] = (int)$stmt->fetchColumn() > 0;
-        }
-        return $cache[$key];
-    }
-
-    private function resolvePendingShares(string $email, int $userId): void {
-        $stmt = $this->db->prepare(
-            'UPDATE profile_shares SET shared_with_user_id = ? WHERE shared_with_email = ? AND shared_with_user_id IS NULL'
-        );
-        $stmt->execute([$userId, $email]);
     }
 }

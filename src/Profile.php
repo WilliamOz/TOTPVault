@@ -1,64 +1,35 @@
 <?php
-// src/Profile.php
+declare(strict_types=1);
 
-class Profile {
+final class Profile {
     private PDO $db;
 
     public function __construct() {
         $this->db = Database::getInstance();
     }
 
-    // ── CRUD ──────────────────────────────────────────────────────────────
-
     public function create(int $userId, array $data): int {
-        $secret = strtoupper(preg_replace('/\s+/', '', $data['secret']));
-        $stmt = $this->db->prepare(
-            'INSERT INTO otp_profiles (user_id, name, issuer, secret_encrypted, algorithm, digits, period, color, icon, hide_code)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([
-            $userId,
-            trim($data['name']),
-            trim($data['issuer'] ?? ''),
-            Crypto::encrypt($secret),
-            $data['algorithm'] ?? 'SHA1',
-            (int)($data['digits'] ?? 6),
-            (int)($data['period'] ?? 30),
-            $data['color']     ?? '#6366f1',
-            $data['icon']      ?? 'fa-shield-halved',
-            (int)($data['hide_code'] ?? 0),
-        ]);
+        $fields = $this->validatedFields($data + [
+            'issuer' => '', 'algorithm' => 'SHA1', 'digits' => 6, 'period' => 30,
+            'color' => '#6366f1', 'icon' => 'fa-shield-halved', 'hide_code' => 0,
+        ], true);
+        $fields['user_id'] = $userId;
+        $columns = implode(', ', array_keys($fields));
+        $placeholders = implode(', ', array_fill(0, count($fields), '?'));
+        $this->db->prepare("INSERT INTO otp_profiles ({$columns}) VALUES ({$placeholders})")->execute(array_values($fields));
         return (int)$this->db->lastInsertId();
     }
 
     public function update(int $profileId, int $userId, array $data): bool {
-        if (!$this->canEdit($profileId, $userId)) return false;
-
-        $fields = [];
-        $params = [];
-
-        foreach (['name', 'issuer', 'algorithm', 'color', 'icon'] as $f) {
-            if (array_key_exists($f, $data)) {
-                $fields[] = "{$f} = ?";
-                $params[] = $data[$f];
-            }
+        if ($this->get($profileId, $userId) === null) {
+            return false;
         }
-        foreach (['digits', 'period', 'hide_code'] as $f) {
-            if (array_key_exists($f, $data)) {
-                $fields[] = "{$f} = ?";
-                $params[] = (int)$data[$f];
-            }
+        $fields = $this->validatedFields($data, false);
+        if ($fields !== []) {
+            $assignments = implode(', ', array_map(static fn(string $key): string => "$key = ?", array_keys($fields)));
+            $stmt = $this->db->prepare("UPDATE otp_profiles SET {$assignments} WHERE id = ? AND user_id = ?");
+            $stmt->execute([...array_values($fields), $profileId, $userId]);
         }
-        if (!empty($data['secret'])) {
-            $fields[] = 'secret_encrypted = ?';
-            $params[] = Crypto::encrypt(strtoupper(preg_replace('/\s+/', '', $data['secret'])));
-        }
-
-        if (empty($fields)) return true;
-        $params[] = $profileId;
-
-        $stmt = $this->db->prepare('UPDATE otp_profiles SET ' . implode(', ', $fields) . ' WHERE id = ?');
-        $stmt->execute($params);
         return true;
     }
 
@@ -69,140 +40,67 @@ class Profile {
     }
 
     public function get(int $profileId, int $userId): ?array {
-        $stmt = $this->db->prepare(
-            'SELECT p.*, u.name AS owner_name, u.email AS owner_email,
-                    IF(p.user_id = :uid, 1, 0) AS is_owner,
-                    COALESCE(s.can_edit, IF(p.user_id = :uid2, 1, 0)) AS can_edit
-             FROM otp_profiles p
-             JOIN users u ON u.id = p.user_id
-             LEFT JOIN profile_shares s ON s.profile_id = p.id AND s.shared_with_user_id = :uid3
-             WHERE p.id = :pid AND (p.user_id = :uid4 OR s.shared_with_user_id = :uid5)'
-        );
-        $stmt->execute([':uid'=>$userId,':uid2'=>$userId,':uid3'=>$userId,':pid'=>$profileId,':uid4'=>$userId,':uid5'=>$userId]);
+        $stmt = $this->db->prepare('SELECT * FROM otp_profiles WHERE id = ? AND user_id = ?');
+        $stmt->execute([$profileId, $userId]);
         return $stmt->fetch() ?: null;
     }
 
     public function listForUser(int $userId): array {
         $stmt = $this->db->prepare(
-            'SELECT p.*, u.name AS owner_name, u.email AS owner_email,
-                    IF(p.user_id = :uid, 1, 0) AS is_owner,
-                    COALESCE(s.can_edit, IF(p.user_id = :uid2, 1, 0)) AS can_edit
-             FROM otp_profiles p
-             JOIN users u ON u.id = p.user_id
-             LEFT JOIN profile_shares s ON s.profile_id = p.id AND s.shared_with_user_id = :uid3
-             WHERE p.user_id = :uid4 OR s.shared_with_user_id = :uid5
-             ORDER BY p.user_id = :uid6 DESC, p.name ASC'
+            'SELECT id, name, issuer, algorithm, digits, period, color, icon, hide_code
+             FROM otp_profiles WHERE user_id = ? ORDER BY name, id'
         );
-        $stmt->execute([':uid'=>$userId,':uid2'=>$userId,':uid3'=>$userId,':uid4'=>$userId,':uid5'=>$userId,':uid6'=>$userId]);
+        $stmt->execute([$userId]);
         return $stmt->fetchAll();
     }
 
-    // ── Sharing ───────────────────────────────────────────────────────────
-
-    public function share(int $profileId, int $ownerUserId, string $email, bool $canEdit = false): bool {
-        $stmt = $this->db->prepare('SELECT id FROM otp_profiles WHERE id = ? AND user_id = ?');
-        $stmt->execute([$profileId, $ownerUserId]);
-        if (!$stmt->fetch()) return false;
-
-        $stmt2 = $this->db->prepare('SELECT id FROM users WHERE email = ?');
-        $stmt2->execute([$email]);
-        $targetUser = $stmt2->fetch();
-        $targetUserId = $targetUser ? $targetUser['id'] : null;
-
-        $stmt3 = $this->db->prepare(
-            'INSERT INTO profile_shares (profile_id, shared_by_user_id, shared_with_email, shared_with_user_id, can_edit)
-             VALUES (?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE shared_with_user_id = VALUES(shared_with_user_id), can_edit = VALUES(can_edit)'
-        );
-        $stmt3->execute([$profileId, $ownerUserId, $email, $targetUserId, $canEdit ? 1 : 0]);
-        return true;
-    }
-
-    public function unshare(int $profileId, int $ownerUserId, string $email): bool {
-        $stmt = $this->db->prepare(
-            'DELETE ps FROM profile_shares ps
-             JOIN otp_profiles p ON p.id = ps.profile_id
-             WHERE ps.profile_id = ? AND p.user_id = ? AND ps.shared_with_email = ?'
-        );
-        $stmt->execute([$profileId, $ownerUserId, $email]);
-        return $stmt->rowCount() > 0;
-    }
-
-    public function getShares(int $profileId, int $ownerUserId): array {
-        $stmt = $this->db->prepare(
-            'SELECT ps.*, u.name AS user_name, u.avatar_url
-             FROM profile_shares ps
-             LEFT JOIN users u ON u.id = ps.shared_with_user_id
-             WHERE ps.profile_id = ? AND ps.shared_by_user_id = ?
-             ORDER BY ps.created_at DESC'
-        );
-        $stmt->execute([$profileId, $ownerUserId]);
-        return $stmt->fetchAll();
-    }
-
-    // ── OTP generation (secret stays server-side) ─────────────────────────
-
-    public function generateOTP(int $profileId, int $userId): array {
+    public function generateOTP(int $profileId, int $userId): ?array {
         $profile = $this->get($profileId, $userId);
-        if (!$profile) throw new RuntimeException('Profile not found or access denied.');
-
+        if (!$profile) {
+            return null;
+        }
         $secret = Crypto::decrypt($profile['secret_encrypted']);
-        $now    = time();
+        $now = time();
         $period = (int)$profile['period'];
-
         return [
-            'code'      => TOTP::generate($secret, $profile['algorithm'], (int)$profile['digits'], $period, $now),
+            'code' => TOTP::generate($secret, $profile['algorithm'], (int)$profile['digits'], $period, $now),
             'remaining' => TOTP::secondsRemaining($period, $now),
-            'progress'  => TOTP::progress($period, $now),
-            'period'    => $period,
-            'digits'    => (int)$profile['digits'],
-            'algorithm' => $profile['algorithm'],
-            'hide_code' => (int)$profile['hide_code'],
+            'progress' => TOTP::progress($period, $now),
         ];
     }
 
-    // ── Export ─────────────────────────────────────────────────────────────
-
-    /**
-     * Return profiles the user can edit, with decrypted secrets, for CSV export.
-     * Only profiles where the user is owner OR has can_edit=1 are included.
-     */
-    public function exportForUser(int $userId): array {
-        $stmt = $this->db->prepare(
-            'SELECT p.id, p.name, p.secret_encrypted, p.algorithm, p.digits, p.period,
-                    IF(p.user_id = :uid, 1, 0) AS is_owner,
-                    COALESCE(s.can_edit, IF(p.user_id = :uid2, 1, 0)) AS can_edit
-             FROM otp_profiles p
-             LEFT JOIN profile_shares s ON s.profile_id = p.id AND s.shared_with_user_id = :uid3
-             WHERE (p.user_id = :uid4 OR (s.shared_with_user_id = :uid5 AND s.can_edit = 1))
-             ORDER BY p.id ASC'
-        );
-        $stmt->execute([':uid'=>$userId,':uid2'=>$userId,':uid3'=>$userId,':uid4'=>$userId,':uid5'=>$userId]);
-        $rows = $stmt->fetchAll();
-
-        $result = [];
-        foreach ($rows as $row) {
-            $result[] = [
-                'profile'   => (int)$row['id'],
-                'seed'      => Crypto::decrypt($row['secret_encrypted']),
-                'title'     => $row['name'],
-                'algorithm' => $row['algorithm'],
-                'digits'    => (int)$row['digits'],
-                'period'    => (int)$row['period'],
-            ];
+    private function validatedFields(array $data, bool $creating): array {
+        $fields = [];
+        foreach (['name', 'issuer', 'algorithm', 'color', 'icon', 'digits', 'period', 'hide_code'] as $field) {
+            if (!array_key_exists($field, $data) && (!$creating || $field !== 'name')) {
+                continue;
+            }
+            $value = $data[$field] ?? null;
+            $text = is_string($value) ? trim($value) : null;
+            $int = is_int($value) || is_string($value) ? filter_var($value, FILTER_VALIDATE_INT) : false;
+            $valid = match ($field) {
+                'name' => $text !== null && $text !== '' && strlen($text) <= 255,
+                'issuer' => $text !== null && strlen($text) <= 255,
+                'algorithm' => in_array($text, ['SHA1', 'SHA256', 'SHA512'], true),
+                'color' => $text !== null && preg_match('/\A#[a-f0-9]{6}\z/i', $text),
+                'icon' => $text !== null && preg_match('/\Afa-[a-z0-9-]{1,47}\z/', $text),
+                'digits' => in_array($int, [6, 8, 10], true),
+                'period' => $int !== false && $int >= 15 && $int <= 300,
+                'hide_code' => in_array($int, [0, 1], true),
+            };
+            if (!$valid) {
+                throw new InvalidArgumentException("Campo inválido: {$field}.");
+            }
+            $fields[$field] = in_array($field, ['digits', 'period', 'hide_code'], true) ? $int : $text;
         }
-        return $result;
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────
-
-    private function canEdit(int $profileId, int $userId): bool {
-        $stmt = $this->db->prepare(
-            'SELECT 1 FROM otp_profiles WHERE id = ? AND user_id = ?
-             UNION
-             SELECT 1 FROM profile_shares WHERE profile_id = ? AND shared_with_user_id = ? AND can_edit = 1'
-        );
-        $stmt->execute([$profileId, $userId, $profileId, $userId]);
-        return (bool)$stmt->fetch();
+        if ($creating || (array_key_exists('secret', $data) && $data['secret'] !== '')) {
+            $raw = $data['secret'] ?? null;
+            $secret = is_string($raw) ? strtoupper(preg_replace('/\s+/', '', $raw)) : '';
+            if (!preg_match('/\A[A-Z2-7]{2,512}={0,6}\z/', $secret)) {
+                throw new InvalidArgumentException('A chave do token deve estar em Base32.');
+            }
+            $fields['secret_encrypted'] = Crypto::encrypt(rtrim($secret, '='));
+        }
+        return $fields;
     }
 }

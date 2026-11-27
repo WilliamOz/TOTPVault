@@ -30,6 +30,5 @@ Remember to import schema.sql (and any files in migrations/) into it manually â€
 automatic schema initialisation only applies to the bundled MariaDB.
 {{- end }}
 
-To sign in you need at least one login method configured: a MailerSend API key
-(MAILERSEND_KEY) for magic-link email login, or OAuth/OIDC credentials for
-Google, Microsoft, GitHub, or Keycloak. See the chart README for details.
+Configure ad.host, ad.baseDn, ad.bindDn, ad.adminGroupDn, the LDAP CA,
+and AD_BIND_PASSWORD in the Secret. Serve the vault via HTTPS.

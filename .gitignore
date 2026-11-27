@@ -1,5 +1,9 @@
 # Secrets — never commit real configuration
 .env
+.env.*
+!.env.example
+/local-config/
+/desktop/bin/
 
 # PHP sessions
 sessions/*

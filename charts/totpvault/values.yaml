@@ -17,7 +17,7 @@ replicaCount: 1
 # service.sessionAffinity: ClientIP. See the chart README before scaling.
 
 image:
-  repository: ghcr.io/token2/totpvault
+  repository: ghcr.io/williamoz/totpvault
   # Defaults to the chart appVersion when empty. Pin a tag in production.
   tag: ""
   pullPolicy: IfNotPresent
@@ -33,60 +33,28 @@ app:
   # http://localhost:8080 for port-forward access.
   url: ""
 
-session:
-  cookieName: totpvault_session
-  lifetime: 2592000 # 30 days in seconds
+# The ingress must terminate HTTPS and overwrite X-Forwarded-Proto.
+appSecurity:
+  trustTlsProxy: true
 
-# ── Mail (MailerSend) — magic-link login ─────────────────────────────────────
-# The API key is a secret: secrets.mailersendKey / MAILERSEND_KEY.
-mail:
-  fromEmail: noreply@localhost
-  fromName: TOTPVault
+ad:
+  host: ""
+  port: 636
+  baseDn: ""
+  bindDn: ""
+  accessGroupDn: ""
+  adminGroupDn: ""
+  # Optional Secret containing a PEM trust chain under the key ad-ca.pem.
+  caSecret: ""
 
-# ── OAuth / OIDC providers (client IDs are not secret) ───────────────────────
-# Leave a clientId empty to disable that provider.
-# Client secrets go in secrets.* / the existing Secret.
-oauth:
-  google:
-    clientId: ""
-  microsoft:
-    clientId: ""
-  github:
-    clientId: ""
-  keycloak:
-    clientId: ""
-    # Public Keycloak root URL, e.g. https://sso.example.com
-    baseUrl: ""
-    # Optional in-cluster URL for token/userinfo calls, e.g.
-    # http://keycloak.sso.svc.cluster.local:8080
-    internalBaseUrl: ""
-    realm: ""
-    # Defaults to <app.url>/auth/callback/keycloak when empty.
-    redirectUri: ""
-    scope: "openid email profile"
-
-# ── Secrets ──────────────────────────────────────────────────────────────────
 secrets:
-  # Name of a pre-created Secret. When set, the chart creates no Secret and the
-  # values below are ignored. The Secret must contain the keys the app reads as
-  # environment variables:
-  #   DB_PASSWORD       (required)
-  #   ENCRYPTION_KEY    (required — base64 of exactly 32 random bytes)
-  #   DB_ROOT_PASSWORD  (required when mariadb.enabled)
-  #   MAILERSEND_KEY, GOOGLE_CLIENT_SECRET, MICROSOFT_CLIENT_SECRET,
-  #   GITHUB_CLIENT_SECRET, KEYCLOAK_CLIENT_SECRET  (optional)
+  # Supply DB_PASSWORD, ENCRYPTION_KEY, AD_BIND_PASSWORD and, for bundled
+  # MariaDB, DB_ROOT_PASSWORD. LEGACY_ENCRYPTION_KEY is optional for upgrades.
   existingSecret: ""
-
-  # Used only when existingSecret is empty. Empty required values are randomly
-  # generated at install time and preserved across upgrades.
   dbPassword: ""
   dbRootPassword: ""
   encryptionKey: ""
-  mailersendKey: ""
-  googleClientSecret: ""
-  microsoftClientSecret: ""
-  githubClientSecret: ""
-  keycloakClientSecret: ""
+  adBindPassword: ""
 
 # ── Internal MariaDB ─────────────────────────────────────────────────────────
 mariadb:
@@ -173,7 +141,7 @@ resources: {}
 # fails while the database is unreachable, which gates traffic correctly.
 livenessProbe:
   httpGet:
-    path: /
+    path: /healthz
     port: http
   initialDelaySeconds: 10
   periodSeconds: 30
@@ -181,7 +149,7 @@ livenessProbe:
   failureThreshold: 6
 readinessProbe:
   httpGet:
-    path: /
+    path: /healthz
     port: http
   initialDelaySeconds: 5
   periodSeconds: 10
