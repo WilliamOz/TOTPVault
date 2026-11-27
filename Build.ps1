@@ -5,6 +5,7 @@ param(
     [ValidateSet('LDAPS','Kerberos')][string]$AdTransport = 'LDAPS',
     [string]$KerberosDomain = '',
     [string]$AdminGroupDn = '',
+    [string]$ServerCertificateSha256 = '',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'bin')
 )
 
@@ -16,6 +17,9 @@ if (![Net.IPAddress]::TryParse($ServerIp, [ref]$address) -or
 }
 if ([Uri]::CheckHostName($AdHost) -ne [UriHostNameType]::Dns -or !$AdHost.Contains('.')) {
     throw 'Use o nome DNS completo do controlador do AD.'
+}
+if ($ServerCertificateSha256 -and $ServerCertificateSha256 -notmatch '^[0-9a-f]{64}$') {
+    throw 'O SHA-256 do certificado deve ter 64 caracteres hexadecimais.'
 }
 if ($AdTransport -eq 'Kerberos' -and ([Uri]::CheckHostName($KerberosDomain) -ne [UriHostNameType]::Dns -or
     !$KerberosDomain.Contains('.') -or !$AdHost.EndsWith('.' + $KerberosDomain,[StringComparison]::OrdinalIgnoreCase))) {
@@ -45,7 +49,8 @@ try {
 
     $settings = Join-Path $build 'BuildSettings.g.cs'
     $url = ConvertTo-Json -InputObject "https://$ServerIp" -Compress
-    [IO.File]::WriteAllText($settings, "namespace TotpVault { internal static class BuildSettings { internal const string ServerUrl = $url; }}")
+    $pin = ConvertTo-Json -InputObject $ServerCertificateSha256.ToUpperInvariant() -Compress
+    [IO.File]::WriteAllText($settings, "namespace TotpVault { internal static class BuildSettings { internal const string ServerUrl = $url; internal const string ServerCertificateSha256 = $pin; }}")
     $clientSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'desktop') -Filter '*.cs' | ForEach-Object FullName) + @($settings)
     Compile 'winexe' $client @('System.Net.Http','System.Web.Extensions','System.Windows.Forms','System.Drawing') $clientSources
 

@@ -19,7 +19,7 @@ No modo LDAPS (TCP 636), a CA do certificado do controlador precisa ser confiáv
 
 O instalador antigo fica em quarentena conforme o processo da TI. Este ZIP usa arquivos separados e o build não é assinado. Se o produto de segurança alertar sobre algum arquivo, preserve o alerta e encaminhe o nome e o hash para análise pela TI. Os hashes do pacote estão em `SHA256SUMS.txt`.
 
-Para o HTTPS do cofre, informe o thumbprint de um certificado corporativo existente, em `LocalMachine\My`, com chave privada e com o IPv4 do cofre no SAN. Se escolher o certificado gerado pelo Windows, a TI precisa distribuir a parte pública `TOTPVault-HTTPS.cer` para os PCs pelo mecanismo de confiança da empresa, após conferir o SHA-256 exibido.
+Para o HTTPS do cofre, informe o thumbprint de um certificado corporativo existente, em `LocalMachine\My`, com chave privada e com o IPv4 do cofre no SAN. Se escolher o certificado gerado pelo Windows, a TI pode distribuir a parte pública `TOTPVault-HTTPS.cer` pelo mecanismo de confiança da empresa ou compilar um cliente com `-ServerCertificateSha256` usando o SHA-256 confirmado desse certificado. O cliente com esse parâmetro aceita apenas o certificado configurado para o endereço do cofre. Uma troca do certificado exige recompilar o cliente com o novo SHA-256. Sem o parâmetro, o cliente usa a confiança normal do Windows.
 
 O último comando cria a tarefa **TOTPVault-Portatil** visível no Agendador, inicia agora e inicia novamente ao ligar o Windows, mesmo sem login no computador. A tarefa usa a conta Windows Serviço Local. Preserve o caminho da pasta. [Agendador de Tarefas](https://learn.microsoft.com/pt-br/powershell/module/scheduledtasks/new-scheduledtasktrigger)
 

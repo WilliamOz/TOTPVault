@@ -160,7 +160,7 @@ namespace TotpVault {
                     loginStatus.Text = "Informe seu usuário e sua senha do AD.";
                     return;
                 }
-                candidate = new VaultApi(server);
+                candidate = new VaultApi(server, BuildSettings.ServerCertificateSha256);
                 var signIn = candidate.Login(username.Text.Trim(), password.Text);
                 password.Clear();
                 string signedAs = await signIn;
@@ -311,6 +311,13 @@ namespace TotpVault {
         }
 
         private static string ErrorMessage(Exception exception, bool atLogin) {
+            for (var error = exception; error != null; error = error.InnerException) {
+                var network = error as System.Net.WebException;
+                if (error is System.Security.Authentication.AuthenticationException ||
+                    (network != null && network.Status == System.Net.WebExceptionStatus.TrustFailure)) {
+                    return "Certificado HTTPS do cofre não reconhecido.";
+                }
+            }
             var response = exception as VaultException;
             if (response != null) {
                 switch (response.Status) {

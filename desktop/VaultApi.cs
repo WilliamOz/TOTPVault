@@ -1,6 +1,9 @@
 using System;
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -23,19 +26,48 @@ namespace TotpVault {
             return uri;
         }
 
-        internal VaultApi(Uri server) {
+        internal VaultApi(Uri server, string certificateSha256 = "") {
             var handler = new HttpClientHandler {
                 CookieContainer = new CookieContainer(),
                 AllowAutoRedirect = false,
                 UseProxy = false,
                 UseDefaultCredentials = false
             };
+            if (!string.IsNullOrEmpty(certificateSha256)) {
+                handler.ServerCertificateCustomValidationCallback = (request, certificate, chain, errors) =>
+                    MatchesServerCertificate(server, request.RequestUri, certificate, chain, errors, certificateSha256);
+            }
             http = new HttpClient(handler) {
                 BaseAddress = server,
                 Timeout = TimeSpan.FromSeconds(15),
                 MaxResponseContentBufferSize = 4 * 1024 * 1024
             };
             http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        }
+
+        internal static bool MatchesServerCertificate(Uri server, Uri request, X509Certificate2 certificate,
+            X509Chain chain, SslPolicyErrors errors, string certificateSha256) {
+            if (request == null || request.Scheme != Uri.UriSchemeHttps || request.Port != server.Port
+                || !string.Equals(request.IdnHost, server.IdnHost, StringComparison.OrdinalIgnoreCase)
+                || certificate == null || (errors & ~SslPolicyErrors.RemoteCertificateChainErrors) != 0) {
+                return false;
+            }
+            var now = DateTime.UtcNow;
+            if (certificate.NotBefore.ToUniversalTime() > now || certificate.NotAfter.ToUniversalTime() <= now) {
+                return false;
+            }
+            if (errors == SslPolicyErrors.RemoteCertificateChainErrors) {
+                // The verified self-signed certificate can be absent from the Windows root store.
+                // Distrust, revocation and all other certificate errors still fail.
+                if (chain == null || chain.ChainStatus.Length == 0) return false;
+                foreach (var status in chain.ChainStatus) {
+                    if ((status.Status & ~X509ChainStatusFlags.UntrustedRoot) != 0) return false;
+                }
+            }
+            using (var sha256 = SHA256.Create()) {
+                var fingerprint = BitConverter.ToString(sha256.ComputeHash(certificate.RawData)).Replace("-", "");
+                return string.Equals(fingerprint, certificateSha256, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         internal async Task<string> Login(string username, string password) {
