@@ -16,6 +16,7 @@ namespace TotpVault {
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(880, 574);
             MinimumSize = new Size(772, 515);
+            DoubleBuffered = true;
             VaultTheme.Decorate(this);
 
             var add = new RoundedButton();
@@ -165,7 +166,7 @@ namespace TotpVault {
                 FillColor = VaultTheme.Navy, LineColor = VaultTheme.Navy
             };
             var grid = new TableLayoutPanel {
-                ColumnCount = 1, RowCount = 8, Dock = DockStyle.Fill, BackColor = Color.Transparent, Margin = Padding.Empty
+                ColumnCount = 1, RowCount = 8, Dock = DockStyle.Fill, BackColor = VaultTheme.Navy, Margin = Padding.Empty
             };
             grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 41));
@@ -182,15 +183,15 @@ namespace TotpVault {
             tokenHeading.AutoEllipsis = true;
             tokenHeading.Text = "Selecione um token";
             grid.Controls.Add(tokenHeading, 0, 1);
-            otp.AutoSize = false;
+            otp.BackColor = VaultTheme.Navy;
             otp.Text = "—";
             otp.ForeColor = VaultTheme.OnNavy;
             otp.Font = new Font("Consolas", 34, FontStyle.Bold);
             otp.Dock = DockStyle.Fill;
             otp.Margin = Padding.Empty;
-            otp.TextAlign = ContentAlignment.MiddleLeft;
             grid.Controls.Add(otp, 0, 3);
-            remaining.AutoSize = true;
+            remaining.Dock = DockStyle.Fill;
+            remaining.BackColor = VaultTheme.Navy;
             remaining.Font = new Font("Segoe UI", 9f);
             remaining.ForeColor = VaultTheme.Pale;
             remaining.Text = "Seu código aparecerá aqui.";

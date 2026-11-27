@@ -67,6 +67,7 @@ namespace TotpVault {
 
         internal RoundedSurface() {
             DoubleBuffered = true;
+            ResizeRedraw = true;
             BackColor = VaultTheme.Canvas;
         }
 
@@ -88,7 +89,8 @@ namespace TotpVault {
         private bool hover, pressed;
 
         internal RoundedButton() {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.Opaque | ControlStyles.ResizeRedraw, true);
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             UseVisualStyleBackColor = false;
@@ -99,17 +101,25 @@ namespace TotpVault {
         protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = pressed = false; Invalidate(); }
         protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button == MouseButtons.Left) pressed = true; Invalidate(); }
         protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); pressed = false; Invalidate(); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { base.OnMouseCaptureChanged(e); if (!Capture && pressed) { pressed = false; Invalidate(); } }
         protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
         protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
         protected override void OnEnabledChanged(EventArgs e) { base.OnEnabledChanged(e); Invalidate(); }
+        protected override void OnChangeUICues(UICuesEventArgs e) { base.OnChangeUICues(e); if (e.ChangeFocus) Invalidate(); }
 
         protected override void OnPaint(PaintEventArgs e) {
-            if (SystemInformation.HighContrast) {
+            bool highContrast = SystemInformation.HighContrast;
+            // Rounded corners still own the full rectangular control surface.
+            using (var background = new SolidBrush(highContrast ? SystemColors.Control : BackColor)) {
+                e.Graphics.FillRectangle(background, e.ClipRectangle);
+            }
+            bool showFocus = Focused && ShowFocusCues;
+            if (highContrast) {
                 TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle,
                     Enabled ? SystemColors.ControlText : SystemColors.GrayText,
                     SystemColors.Control, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
                 ControlPaint.DrawBorder(e.Graphics, ClientRectangle, SystemColors.ControlText, ButtonBorderStyle.Solid);
-                if (Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
+                if (showFocus) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -3, -3));
                 return;
             }
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -132,7 +142,7 @@ namespace TotpVault {
             }
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ink,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            if (Focused && Enabled) {
+            if (showFocus && Enabled) {
                 using (var path = VaultTheme.Rounded(new RectangleF(3,3,Width-6,Height-6), 7 * DeviceDpi / 96f))
                 using (var stroke = new Pen(OnDark && !Primary || Primary && !OnDark ? VaultTheme.Cyan : VaultTheme.Brand, 1.4f)) {
                     stroke.DashStyle = DashStyle.Dot;
@@ -194,6 +204,29 @@ namespace TotpVault {
                 detailFont.Dispose();
             }
             base.Dispose(disposing);
+        }
+    }
+
+    internal sealed class CodeLabel : Control {
+        private readonly TextFormatFlags alignment;
+
+        internal CodeLabel(TextFormatFlags alignment) {
+            this.alignment = alignment;
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.ResizeRedraw | ControlStyles.UseTextForAccessibility, true);
+            SetStyle(ControlStyles.Selectable, false);
+            AccessibleRole = AccessibleRole.StaticText;
+            TabStop = false;
+        }
+
+        protected override void OnTextChanged(EventArgs e) {
+            base.OnTextChanged(e);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e) {
+            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, ForeColor,
+                alignment | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
         }
     }
 

@@ -25,8 +25,8 @@ namespace TotpVault {
         private readonly Label loginStatus = new Label();
         private readonly Label vaultStatus = new Label();
         private readonly Label account = new Label();
-        private readonly Label otp = new Label();
-        private readonly Label remaining = new Label();
+        private readonly CodeLabel otp = new CodeLabel(TextFormatFlags.VerticalCenter);
+        private readonly CodeLabel remaining = new CodeLabel(TextFormatFlags.Top);
         private readonly ListBox tokens = new VaultTokenList();
         private readonly Button copy = new RoundedButton();
         private readonly Button reveal = new RoundedButton();
