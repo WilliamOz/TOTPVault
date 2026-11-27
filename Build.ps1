@@ -52,7 +52,9 @@ try {
     $pin = ConvertTo-Json -InputObject $ServerCertificateSha256.ToUpperInvariant() -Compress
     [IO.File]::WriteAllText($settings, "namespace TotpVault { internal static class BuildSettings { internal const string ServerUrl = $url; internal const string ServerCertificateSha256 = $pin; }}")
     $clientSources = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'desktop') -Filter '*.cs' | ForEach-Object FullName) + @($settings)
-    Compile 'winexe' $client @('System.Net.Http','System.Web.Extensions','System.Windows.Forms','System.Drawing') $clientSources
+    $icon = Join-Path $PSScriptRoot 'desktop/assets/TOTPVault.ico'
+    $mark = Join-Path $PSScriptRoot 'desktop/assets/mark.png'
+    Compile 'winexe' $client @('System.Net.Http','System.Web.Extensions','System.Windows.Forms','System.Drawing','System.Security') $clientSources @("/win32icon:$icon","/resource:$mark,TotpVault.Brand.png")
 
     foreach ($script in Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'portable') -Filter '*.ps1' -File) {
         $body = [IO.File]::ReadAllText($script.FullName)

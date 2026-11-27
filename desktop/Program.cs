@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.IO;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -16,24 +17,26 @@ namespace TotpVault {
         }
     }
 
-    internal sealed class VaultWindow : Form {
+    internal sealed partial class VaultWindow : Form {
         private readonly TextBox username = new TextBox { MaxLength = 80 };
         private readonly TextBox password = new TextBox { MaxLength = 1024, UseSystemPasswordChar = true };
-        private readonly Button login = new Button();
+        private readonly Button login = new RoundedButton();
+        private readonly Button retrySession = new RoundedButton { Visible = false };
         private readonly Label loginStatus = new Label();
         private readonly Label vaultStatus = new Label();
         private readonly Label account = new Label();
         private readonly Label otp = new Label();
         private readonly Label remaining = new Label();
-        private readonly ListBox tokens = new ListBox { DisplayMember = "Title", IntegralHeight = false };
-        private readonly Button copy = new Button();
-        private readonly Button reveal = new Button();
-        private readonly Button edit = new Button();
-        private readonly Button delete = new Button();
-        private readonly Button admin = new Button { Visible = false };
+        private readonly ListBox tokens = new VaultTokenList();
+        private readonly Button copy = new RoundedButton();
+        private readonly Button reveal = new RoundedButton();
+        private readonly Button edit = new RoundedButton();
+        private readonly Button delete = new RoundedButton();
+        private readonly Button admin = new RoundedButton { Visible = false };
         private readonly Timer timer = new Timer { Interval = 1000 };
-        private readonly TableLayoutPanel loginPanel;
-        private readonly TableLayoutPanel vaultPanel;
+        private readonly Uri endpoint = VaultApi.ParseServer(BuildSettings.ServerUrl);
+        private readonly SessionCache cache;
+        private StoredSession activeSession;
         private VaultApi api;
         private bool working;
         private bool polling;
@@ -43,83 +46,17 @@ namespace TotpVault {
         private DateTime codeExpiry;
         private TokenInfo Selected { get { return tokens.SelectedItem as TokenInfo; } }
 
-        internal VaultWindow() {
-            Text = "TOTPVault";
-            StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(640, 465);
-            MinimumSize = new Size(555, 442);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            Font = new Font("Segoe UI", 10);
-            BackColor = Color.FromArgb(245, 247, 252);
-            ForeColor = Color.FromArgb(25, 33, 51);
+        internal VaultWindow() : this(null) {}
 
-            loginPanel = Column(465);
-            loginPanel.Controls.Add(Label("TOTPVault", 24, true));
-            loginPanel.Controls.Add(Label("Entre com sua conta do Active Directory", 10, false));
-            AddField(loginPanel, "Usuário do AD", username);
-            AddField(loginPanel, "Senha", password);
-            SetupButton(login, "Entrar", true);
-            loginPanel.Controls.Add(login);
-            ConfigureStatus(loginStatus);
-            loginPanel.Controls.Add(loginStatus);
-
-            vaultPanel = Column(1180);
-            vaultPanel.AutoSize = false;
-            vaultPanel.Dock = DockStyle.Fill;
-            vaultPanel.Padding = new Padding(25, 18, 25, 16);
-            vaultPanel.RowCount = 8;
-            for (int i = 0; i < vaultPanel.RowCount; i++) {
-                vaultPanel.RowStyles.Add(i == 2 ? new RowStyle(SizeType.Percent, 100) : new RowStyle(SizeType.AutoSize));
-            }
-            vaultPanel.Controls.Add(Label("Meus tokens", 21, true));
-            account.AutoSize = true;
-            vaultPanel.Controls.Add(account);
-            tokens.Dock = DockStyle.Fill;
-            tokens.MinimumSize = new Size(270, 75);
-            tokens.AccessibleName = "Tokens do usuário";
-            vaultPanel.Controls.Add(tokens);
-            otp.AutoSize = true;
-            otp.Text = "—";
-            otp.Font = new Font("Consolas", 29, FontStyle.Bold);
-            otp.Margin = new Padding(0, 8, 0, 0);
-            vaultPanel.Controls.Add(otp);
-            remaining.AutoSize = true;
-            vaultPanel.Controls.Add(remaining);
-            var codeActions = Arow();
-            SetupButton(copy, "Copiar código", true);
-            SetupButton(reveal, "Mostrar código", false);
-            codeActions.Controls.AddRange(new Control[] { copy, reveal });
-            vaultPanel.Controls.Add(codeActions);
-            var actions = Arow();
-            var add = new Button();
-            var signOut = new Button();
-            SetupButton(add, "Adicionar", false);
-            SetupButton(edit, "Editar", false);
-            SetupButton(delete, "Excluir", false);
-            SetupButton(signOut, "Sair", false);
-            SetupButton(admin, "Usuários", false);
-            actions.Controls.AddRange(new Control[] { add, edit, delete, admin, signOut });
-            vaultPanel.Controls.Add(actions);
-            ConfigureStatus(vaultStatus);
-            vaultPanel.Controls.Add(vaultStatus);
-
-            var center = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 3 };
-            center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            center.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 455));
-            center.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            center.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            center.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            center.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            loginPanel.Dock = DockStyle.Fill;
-            center.Controls.Add(loginPanel, 1, 1);
-            Controls.Add(vaultPanel);
-            Controls.Add(center);
-            vaultPanel.Hide();
-            AcceptButton = login;
-            Shown += (s, e) => username.Focus();
+        internal VaultWindow(SessionCache customCache) {
+            cache = customCache ?? new SessionCache(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TOTPVault"),
+                endpoint.AbsoluteUri, BuildSettings.ServerCertificateSha256);
+            BuildInterface();
+            Shown += async (s, e) => await RestoreSession();
 
             login.Click += async (s, e) => await SignIn();
-            signOut.Click += async (s, e) => await SignOut();
+            retrySession.Click += async (s, e) => await RestoreSession();
             timer.Tick += async (s, e) => await RefreshCode();
             tokens.SelectedIndexChanged += async (s, e) => {
                 revealUntil = DateTime.MinValue;
@@ -135,7 +72,6 @@ namespace TotpVault {
                 try { Clipboard.SetText(currentCode); vaultStatus.Text = "Código copiado."; }
                 catch (System.Runtime.InteropServices.ExternalException) { vaultStatus.Text = "Área de transferência indisponível."; }
             };
-            add.Click += async (s, e) => await ChangeToken(null);
             edit.Click += async (s, e) => { if (Selected != null) await ChangeToken(Selected); };
             delete.Click += async (s, e) => await DeleteToken();
             admin.Click += (s, e) => {
@@ -152,57 +88,123 @@ namespace TotpVault {
             if (working) return;
             working = true;
             login.Enabled = false;
+            retrySession.Enabled = false;
             loginStatus.Text = "Entrando…";
             VaultApi candidate = null;
             try {
-                var server = VaultApi.ParseServer(BuildSettings.ServerUrl);
                 if (username.TextLength == 0 || password.TextLength == 0) {
                     loginStatus.Text = "Informe seu usuário e sua senha do AD.";
                     return;
                 }
-                candidate = new VaultApi(server, BuildSettings.ServerCertificateSha256);
+                candidate = new VaultApi(endpoint, BuildSettings.ServerCertificateSha256);
                 var signIn = candidate.Login(username.Text.Trim(), password.Text);
                 password.Clear();
                 string signedAs = await signIn;
                 if (string.IsNullOrEmpty(signedAs)) throw new InvalidOperationException("Sessão inválida.");
+                var record = new StoredSession(candidate.SessionToken, DateTime.UtcNow.AddHours(8));
+                var previousRecord = cache.Load();
+                bool remembered = cache.Save(record);
+                if (!remembered && previousRecord != null) cache.Clear(previousRecord.Token);
                 var profiles = await candidate.ListTokens();
-                api = candidate;
+                if (IsDisposed) return;
+                OpenVault(candidate, signedAs, record, profiles);
                 candidate = null;
-                admin.Visible = api.CanAdmin;
-                account.Text = signedAs;
-                loginPanel.Parent.Hide();
-                vaultPanel.Show();
-                AcceptButton = null;
-                LoadTokens(profiles, null);
-                vaultStatus.Text = profiles.Length == 0 ? "Adicione seu primeiro token TOTP." : "";
-                timer.Start();
+                if (!remembered) vaultStatus.Text = "A sessão está ativa. O Windows não conseguiu salvá-la para reabrir.";
             } catch (Exception ex) {
-                loginStatus.Text = ErrorMessage(ex, true);
+                if (!IsDisposed) {
+                    loginStatus.Text = ErrorMessage(ex, true);
+                    retrySession.Visible = cache.Load() != null;
+                }
             } finally {
                 if (candidate != null) candidate.Dispose();
                 working = false;
-                login.Enabled = true;
+                if (!IsDisposed) login.Enabled = retrySession.Enabled = true;
             }
             await RefreshCode();
+        }
+
+        private async Task RestoreSession() {
+            if (working || api != null) return;
+            var record = cache.Load();
+            if (record == null) {
+                retrySession.Visible = false;
+                username.Focus();
+                return;
+            }
+            working = true;
+            login.Enabled = retrySession.Enabled = false;
+            loginStatus.Text = "Restaurando sessão…";
+            VaultApi candidate = new VaultApi(endpoint, BuildSettings.ServerCertificateSha256);
+            try {
+                var signedAs = await candidate.Restore(record.Token);
+                if (string.IsNullOrEmpty(signedAs)) throw new VaultException(401);
+                var profiles = await candidate.ListTokens();
+                if (IsDisposed) return;
+                OpenVault(candidate, signedAs, record, profiles);
+                candidate = null;
+            } catch (VaultException ex) {
+                if (ex.Status == 401) {
+                    cache.Clear(record.Token);
+                    if (!IsDisposed) {
+                        retrySession.Visible = false;
+                        loginStatus.Text = "Sessão encerrada. Entre novamente.";
+                    }
+                } else if (!IsDisposed) {
+                    retrySession.Visible = true;
+                    loginStatus.Text = ErrorMessage(ex, true);
+                }
+            } catch (Exception ex) {
+                if (!IsDisposed) {
+                    retrySession.Visible = true;
+                    loginStatus.Text = ErrorMessage(ex, true);
+                }
+            } finally {
+                if (candidate != null) candidate.Dispose();
+                working = false;
+                if (!IsDisposed) login.Enabled = retrySession.Enabled = true;
+            }
+            if (!IsDisposed && api == null) username.Focus();
+            await RefreshCode();
+        }
+
+        private void OpenVault(VaultApi connection, string signedAs, StoredSession record, TokenInfo[] profiles) {
+            api = connection;
+            activeSession = record;
+            admin.Visible = connection.CanAdmin;
+            account.Text = signedAs;
+            sessionTime.Text = "Sessão até " + record.ExpiresUtc.ToLocalTime().ToString("HH:mm");
+            username.Text = signedAs;
+            retrySession.Visible = false;
+            loginView.Hide();
+            vaultPanel.Show();
+            AcceptButton = null;
+            LoadTokens(profiles, null);
+            vaultStatus.Text = "";
+            timer.Start();
         }
 
         private async Task SignOut() {
             var previous = api;
             if (previous == null) return;
+            bool cleared = activeSession == null || cache.Clear(activeSession.Token);
             CloseVault("");
-            try { await previous.Logout(); } catch (Exception) { }
+            try { await previous.Logout(); }
+            catch (Exception) {
+                if (!cleared && !IsDisposed) loginStatus.Text = "Não foi possível confirmar a saída. Verifique a conexão.";
+            }
             finally { previous.Dispose(); }
         }
 
         private void CloseVault(string message) {
             api = null;
+            activeSession = null;
             timer.Stop();
             ClearCode();
             revealUntil = DateTime.MinValue;
             tokens.DataSource = null;
             account.Text = "";
             vaultPanel.Hide();
-            loginPanel.Parent.Show();
+            loginView.Show();
             AcceptButton = login;
             loginStatus.Text = message;
             password.Focus();
@@ -211,9 +213,12 @@ namespace TotpVault {
         private void ClearCode() {
             currentCode = null;
             otp.Text = "—";
-            remaining.Text = " ";
+            tokenHeading.Text = Selected == null ? "Selecione um token" : Selected.name;
+            remaining.Text = Selected == null ? "Seu código aparecerá aqui." :
+                Selected.hide_code != 0 ? "O código está oculto." : "Aguardando código…";
+            codeProgress.Fraction = 0;
             copy.Enabled = false;
-            reveal.Enabled = Selected != null && Selected.hide_code != 0;
+            reveal.Visible = reveal.Enabled = Selected != null && Selected.hide_code != 0;
             edit.Enabled = delete.Enabled = Selected != null;
         }
 
@@ -221,6 +226,10 @@ namespace TotpVault {
             var connection = api;
             if (connection == null || working || polling) return;
             DateTime now = DateTime.UtcNow;
+            if (activeSession != null && activeSession.ExpiresUtc <= now) {
+                HandleVaultError(new VaultException(401));
+                return;
+            }
             var token = Selected;
             bool show = token != null && (token.hide_code == 0 || revealUntil > now);
             if (!show) ClearCode();
@@ -241,8 +250,9 @@ namespace TotpVault {
                 }
                 currentCode = value.code;
                 codeExpiry = now.AddSeconds(Math.Max(0, value.remaining));
-                otp.Text = value.code;
-                remaining.Text = value.remaining + " s para renovar";
+                otp.Text = FormatCode(value.code);
+                remaining.Text = "Renova em " + value.remaining + " s";
+                codeProgress.Fraction = value.remaining / (float)Math.Max(1, token.period);
                 copy.Enabled = currentCode != null;
                 reveal.Enabled = false;
             } catch (Exception ex) {
@@ -255,6 +265,8 @@ namespace TotpVault {
 
         private void LoadTokens(TokenInfo[] entries, int? selectedId) {
             tokens.DataSource = entries;
+            emptyTokens.Visible = entries.Length == 0;
+            tokens.Visible = entries.Length != 0;
             if (selectedId.HasValue) {
                 for (int i = 0; i < entries.Length; i++) {
                     if (entries[i].id == selectedId.Value) { tokens.SelectedIndex = i; break; }
@@ -303,6 +315,7 @@ namespace TotpVault {
             var response = ex as VaultException;
             if (response != null && response.Status == 401) {
                 var previous = api;
+                if (activeSession != null) cache.Clear(activeSession.Token);
                 CloseVault("Sessão encerrada. Entre novamente.");
                 previous.Dispose();
             } else {
@@ -342,42 +355,61 @@ namespace TotpVault {
         }
 
         internal static Label Label(string text, float size, bool bold) {
-            return new Label { Text = text, AutoSize = true, Margin = new Padding(0, 2, 0, 5),
-                Font = new Font("Segoe UI", size, bold ? FontStyle.Bold : FontStyle.Regular) };
+            return VaultTheme.Label(text, size, bold, VaultTheme.Ink);
         }
 
         internal static void AddField(TableLayoutPanel panel, string title, Control input) {
-            var label = Label(title, 10, false);
-            label.Margin = new Padding(0, 6, 0, 0);
+            var label = Label(title, 9, true);
+            label.Margin = new Padding(0, 5, 0, 2);
             panel.Controls.Add(label);
             input.AccessibleName = title;
             input.Dock = DockStyle.Top;
-            input.Margin = new Padding(0, 3, 0, 3);
-            panel.Controls.Add(input);
+            input.Margin = new Padding(0, 0, 0, 3);
+            var text = input as TextBox;
+            if (text != null && !SystemInformation.HighContrast) {
+                var field = new RoundedSurface {
+                    Radius = 9, Height = 37, Dock = DockStyle.Top, Padding = new Padding(10, 8, 10, 4),
+                    Margin = new Padding(0, 0, 0, 4), BackColor = VaultTheme.Surface,
+                    FillColor = Color.FromArgb(248, 251, 254)
+                };
+                text.BackColor = field.FillColor;
+                text.ForeColor = VaultTheme.Ink;
+                text.BorderStyle = BorderStyle.None;
+                text.Enter += (s, e) => { field.LineColor = VaultTheme.Brand; field.Invalidate(); };
+                text.Leave += (s, e) => { field.LineColor = VaultTheme.Border; field.Invalidate(); };
+                field.Controls.Add(text);
+                panel.Controls.Add(field);
+            } else {
+                panel.Controls.Add(input);
+            }
         }
 
-        internal static void SetupButton(Button button, string name, bool primary) {
+        internal static void SetupButton(Button button, string name, bool primary, bool onDark = false) {
             button.Text = name;
             button.AutoSize = true;
-            button.MinimumSize = new Size(75, 31);
-            button.Margin = new Padding(0, 5, 8, 3);
-            button.Padding = new Padding(6, 0, 6, 0);
-            if (!primary) return;
-            button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderSize = 0;
-            button.BackColor = Color.FromArgb(34, 71, 168);
-            button.ForeColor = Color.White;
+            button.MinimumSize = new Size(75, 36);
+            button.Margin = new Padding(0, 3, 8, 3);
+            button.Padding = new Padding(10, 0, 10, 0);
+            button.BackColor = onDark ? VaultTheme.Navy : VaultTheme.Surface;
+            button.ForeColor = onDark ? Color.White : VaultTheme.Ink;
+            var rounded = button as RoundedButton;
+            if (rounded != null) {
+                rounded.Primary = primary;
+                rounded.OnDark = onDark;
+            }
         }
 
         private static void ConfigureStatus(Label status) {
-            status.Height = 31;
+            status.Height = 42;
             status.Dock = DockStyle.Top;
-            status.ForeColor = Color.FromArgb(115, 44, 45);
+            status.Margin = new Padding(0, 2, 0, 0);
+            status.TextAlign = ContentAlignment.MiddleLeft;
+            status.ForeColor = VaultTheme.Muted;
             status.AutoEllipsis = true;
         }
 
-        private static FlowLayoutPanel Arow() {
-            return new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        private static FlowLayoutPanel ButtonRow() {
+            return new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty, BackColor = Color.Transparent };
         }
     }
 }

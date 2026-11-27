@@ -11,7 +11,7 @@ namespace TotpVault {
             View = View.Details, FullRowSelect = true, MultiSelect = false, Dock = DockStyle.Fill
         };
         private readonly Label status = new Label { AutoSize = true };
-        private readonly Button change = new Button { Enabled = false };
+        private readonly Button change = new RoundedButton { Enabled = false };
         private bool busy;
 
         internal AdminWindow(VaultApi api, Action<Exception> onError) {
@@ -21,22 +21,26 @@ namespace TotpVault {
             ClientSize = new Size(665, 410);
             MinimumSize = new Size(540, 285);
             StartPosition = FormStartPosition.CenterParent;
-            AutoScaleMode = AutoScaleMode.Dpi;
-            Font = new Font("Segoe UI", 10);
+            VaultTheme.Decorate(this);
             var panel = new TableLayoutPanel { ColumnCount = 1, RowCount = 4, Dock = DockStyle.Fill, Padding = new Padding(18) };
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             panel.Controls.Add(VaultWindow.Label("Usuários do cofre", 18, true));
+            users.BackColor = VaultTheme.Surface;
+            users.ForeColor = VaultTheme.Ink;
+            users.BorderStyle = BorderStyle.None;
+            users.HideSelection = false;
             users.Columns.Add("Nome", 245);
             users.Columns.Add("Usuário do AD", 175);
             users.Columns.Add("Acesso", 175);
             panel.Controls.Add(users);
             var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false };
-            var reload = new Button();
+            var reload = new RoundedButton();
             VaultWindow.SetupButton(change, "Desabilitar", true);
             VaultWindow.SetupButton(reload, "Atualizar lista", false);
+            change.BackColor = reload.BackColor = VaultTheme.Canvas;
             row.Controls.AddRange(new Control[] { change, reload });
             panel.Controls.Add(row);
             panel.Controls.Add(status);

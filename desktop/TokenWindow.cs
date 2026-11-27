@@ -17,13 +17,16 @@ namespace TotpVault {
 
         internal TokenWindow(TokenInfo old) {
             Text = old == null ? "Adicionar token" : "Editar token";
-            ClientSize = new Size(420, 471);
-            Font = new Font("Segoe UI", 10);
+            ClientSize = new Size(474, 511);
+            VaultTheme.Decorate(this);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = MinimizeBox = false;
-            var stack = VaultWindow.Column(420);
+            var stack = VaultWindow.Column(474);
             stack.Dock = DockStyle.Fill;
+            stack.Padding = new Padding(24,18,24,18);
+            stack.BackColor = VaultTheme.Surface;
+            stack.Controls.Add(VaultWindow.Label(Text, 17, true));
             Controls.Add(stack);
             VaultWindow.AddField(stack, "Nome", name);
             VaultWindow.AddField(stack, "Serviço (opcional)", issuer);
@@ -32,10 +35,15 @@ namespace TotpVault {
             VaultWindow.AddField(stack, "Dígitos", digits);
             VaultWindow.AddField(stack, "Período (segundos)", period);
             stack.Controls.Add(hide);
-            var save = new Button();
+            var save = new RoundedButton();
+            var cancel = new RoundedButton { DialogResult = DialogResult.Cancel };
             VaultWindow.SetupButton(save, "Salvar", true);
-            stack.Controls.Add(save);
+            VaultWindow.SetupButton(cancel, "Cancelar", false);
+            var actions = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0,6,0,0) };
+            actions.Controls.AddRange(new Control[] { save, cancel });
+            stack.Controls.Add(actions);
             AcceptButton = save;
+            CancelButton = cancel;
             algo.Items.AddRange(new object[] { "SHA1", "SHA256", "SHA512" });
             digits.Items.AddRange(new object[] { 6, 8, 10 });
             name.Text = old == null ? "" : old.name;

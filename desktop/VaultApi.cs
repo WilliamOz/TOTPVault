@@ -10,7 +10,9 @@ using System.Web.Script.Serialization;
 
 namespace TotpVault {
     internal sealed class VaultApi : IDisposable {
+        private const string SessionCookie = "__Host-TOTPVault";
         private readonly HttpClient http;
+        private readonly CookieContainer cookies = new CookieContainer();
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private string csrf;
         internal bool CanAdmin { get; private set; }
@@ -28,7 +30,7 @@ namespace TotpVault {
 
         internal VaultApi(Uri server, string certificateSha256 = "") {
             var handler = new HttpClientHandler {
-                CookieContainer = new CookieContainer(),
+                CookieContainer = cookies,
                 AllowAutoRedirect = false,
                 UseProxy = false,
                 UseDefaultCredentials = false
@@ -73,6 +75,23 @@ namespace TotpVault {
         internal async Task<string> Login(string username, string password) {
             csrf = (await Send<SessionInfo>(HttpMethod.Get, "api/session")).csrf;
             var session = await Send<SessionInfo>(HttpMethod.Post, "api/session/login", new { username, password });
+            csrf = session.csrf;
+            CanAdmin = session.admin;
+            return session.username;
+        }
+
+        internal string SessionToken {
+            get {
+                var cookie = cookies.GetCookies(http.BaseAddress)[SessionCookie];
+                return cookie != null && SessionCache.IsToken(cookie.Value) ? cookie.Value : null;
+            }
+        }
+
+        internal async Task<string> Restore(string token) {
+            if (!SessionCache.IsToken(token)) return null;
+            cookies.Add(http.BaseAddress, new Cookie(SessionCookie, token, "/") { Secure = true, HttpOnly = true });
+            var session = await GetSession();
+            if (string.IsNullOrEmpty(session.username) || string.IsNullOrEmpty(session.csrf)) return null;
             csrf = session.csrf;
             CanAdmin = session.admin;
             return session.username;
