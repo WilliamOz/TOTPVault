@@ -1,3 +1,0 @@
-# Deny all direct HTTP access to sessions/
-# PHP session files contain sensitive authentication data.
-Require all denied

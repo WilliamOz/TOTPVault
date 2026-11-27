@@ -10,6 +10,7 @@ namespace TotpVault {
         private readonly HttpClient http;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private string csrf;
+        internal bool CanAdmin { get; private set; }
 
         internal static Uri ParseServer(string value) {
             Uri uri;
@@ -26,6 +27,7 @@ namespace TotpVault {
             var handler = new HttpClientHandler {
                 CookieContainer = new CookieContainer(),
                 AllowAutoRedirect = false,
+                UseProxy = false,
                 UseDefaultCredentials = false
             };
             http = new HttpClient(handler) {
@@ -40,6 +42,7 @@ namespace TotpVault {
             csrf = (await Send<SessionInfo>(HttpMethod.Get, "api/session")).csrf;
             var session = await Send<SessionInfo>(HttpMethod.Post, "api/session/login", new { username, password });
             csrf = session.csrf;
+            CanAdmin = session.admin;
             return session.username;
         }
 
@@ -70,6 +73,14 @@ namespace TotpVault {
 
         internal Task<object> Logout() {
             return Send<object>(HttpMethod.Delete, "api/session");
+        }
+
+        internal Task<AccountInfo[]> ListAccounts() {
+            return Send<AccountInfo[]>(HttpMethod.Get, "api/admin/users");
+        }
+
+        internal Task<object> SetDisabled(int id, bool disabled) {
+            return Send<object>(HttpMethod.Post, "api/admin/users/" + id, new { disabled });
         }
 
         private async Task<T> Send<T>(HttpMethod method, string path, object payload = null) {
@@ -107,6 +118,15 @@ namespace TotpVault {
     public sealed class SessionInfo {
         public string csrf { get; set; }
         public string username { get; set; }
+        public bool admin { get; set; }
+    }
+
+    public sealed class AccountInfo {
+        public int id { get; set; }
+        public string username { get; set; }
+        public string name { get; set; }
+        public bool disabled { get; set; }
+        public bool self { get; set; }
     }
 
     public sealed class TokenInfo {

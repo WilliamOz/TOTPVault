@@ -1,3 +1,0 @@
-# Deny all direct HTTP access to src/
-# PHP source files are included by the front controller, not served directly.
-Require all denied

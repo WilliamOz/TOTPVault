@@ -1,3 +1,0 @@
-# Deny all direct HTTP access to config/
-# Secrets and application configuration must never be served by Apache.
-Require all denied

@@ -1,34 +1,29 @@
-# TOTPVault com Active Directory
+# TOTPVault nativo para Windows
 
-O [autenticador para Windows](desktop/README.md) usa o mesmo cofre e permite consultar códigos sem abrir o navegador.
+Servidor em C# executado como serviço do Windows e autenticador WinForms. Usa o .NET Framework 4.8 ou posterior, HTTPS pelo HTTP.sys, Active Directory via LDAPS e um cofre local protegido pelo DPAPI do Windows. A edição `windows-native` é independente da versão PHP que permanece na branch `main`.
 
-Cofre TOTP para a rede interna. O funcionário entra com o usuário do AD e consulta seus códigos pelo navegador. Cada conta possui um cofre próprio, vinculado ao `objectGUID` do AD. Alterar o login da conta mantém os tokens. O aplicativo cria o cadastro local no primeiro login.
+## Instalar
 
-O painel **Administrar usuários** lista as contas que já entraram no cofre. Membros diretos do grupo de administradores podem desabilitar ou reabilitar esses cadastros. O bloqueio vale na próxima requisição, preserva os tokens e invalida as sessões anteriores, inclusive depois da reabilitação. O painel controla somente o acesso ao TOTPVault e registra quem alterou cada conta na tabela `user_access_audit`. Administradores também só podem acessar seus próprios tokens.
+1. Execute o instalador na máquina Windows que possui o IPv4 para o qual o pacote foi compilado. A porta TCP 443 precisa estar livre para esse endereço. O assistente usa privilégios de administrador local para registrar o serviço e a regra de firewall, limitada às sub-redes locais e aos perfis Domínio e Privado.
+2. Tenha o UPN ou DN e a senha de uma conta de serviço **somente leitura** do AD e o DN completo do grupo de administradores do cofre. Um grupo opcional pode restringir quais funcionários entram. Os grupos devem ter membros diretos. Deixe a Base DN em branco para ler o contexto padrão do AD.
+3. O controlador precisa aceitar LDAPS na porta 636 e apresentar um certificado que corresponda ao seu nome DNS. O Windows que recebe o serviço precisa confiar na CA do controlador no repositório de certificado da **Máquina Local**. O assistente valida a conta de serviço, a base e os grupos antes de registrar o serviço.
+4. Para HTTPS do cofre, use de preferência um certificado corporativo instalado em `LocalMachine\My`, com chave privada e o IPv4 de destino no SAN. Se o assistente gerar um certificado, ele exportará a parte pública `TOTPVault-HTTPS.cer` para a pasta do aplicativo. A TI deve distribuir esse certificado pelo mecanismo de confiança dos PCs, após validar a impressão digital que o instalador exibe. O autenticador mantém a validação de certificados do Windows.
+5. Distribua o `TOTPVault.exe` instalado em `C:\Program Files\TOTPVaultNative`. A tela solicita usuário curto do AD e senha. O endereço é fixado na compilação. Administradores veem o botão **Usuários** e podem desabilitar ou reabilitar contas do cofre. Os funcionários precisam de acesso de rede ao cofre.
 
-## Implantação com Docker Compose
+O painel controla as contas que já entraram no aplicativo. Desabilitar invalida as sessões e preserva tokens. Reabilitar exige novo login. A conta do domínio permanece sob gestão do AD. Alterações do grupo administrador são verificadas em cada ação no painel.
 
-1. Configure o LDAPS no controlador de domínio. Obtenha o nome DNS completo que aparece no certificado e a cadeia da CA em PEM. O servidor do cofre deve resolver o nome e alcançar o controlador na porta TCP 636. Consulte a [documentação do certificado LDAPS](https://learn.microsoft.com/pt-br/windows-server/identity/ad-ds/configure-ldap-signing-certificates).
-2. Separe uma conta de serviço somente leitura que possa pesquisar a base e ler os atributos necessários, incluindo `objectGUID`, `sAMAccountName`, `displayName`, `userAccountControl`, `accountExpires` e `memberOf`. Defina um grupo de administradores e, de preferência, outro grupo para autorizar os usuários do cofre. Use membros diretos nos dois grupos.
-3. Copie `.env.example` para `.env`. Defina senhas únicas para o MariaDB, gere `ENCRYPTION_KEY` com `openssl rand -base64 32` e preencha as variáveis `AD_*`. Coloque a cadeia de confiança em `local-config/ad-ca.pem`. Guarde o `.env` com acesso restrito.
-4. Execute `docker compose up -d --build`. A porta HTTP fica vinculada somente a `127.0.0.1:8080`. Configure um proxy HTTPS local que sobrescreva `X-Forwarded-Proto` e impeça acesso direto ao backend. Para servir HTTPS diretamente no Apache, use `TRUST_TLS_PROXY=false`.
-5. Abra a URL HTTPS pelo navegador. Use o nome curto do AD (`sAMAccountName`). Teste com dois funcionários e um administrador antes de importar segredos reais.
+Os dados ficam em `%ProgramData%\TOTPVaultNative`. Faça backup como administrador, preservando a instalação e as chaves de máquina do Windows. Copiar apenas `cofre.dat` para outra máquina não transfere o cofre. A edição nativa cria um cofre novo. Seus segredos estão protegidos contra leitura do arquivo por usuários sem acesso à pasta. Uma conta administrativa ou o serviço com controle sobre o servidor pode acessar o cofre.
 
-O cofre limita tentativas por conta e por endereço remoto. Atrás de proxy, configure `mod_remoteip` com a lista explícita de proxies confiáveis se precisar preservar o IP de origem. A aplicação usa `REMOTE_ADDR`. Sem essa configuração, o limite por IP é compartilhado pelos clientes do proxy.
+A autenticação do aplicativo é feita pela senha do AD. Se o sistema que consome o código também aceita essa mesma senha, abrir o cofre com ela não oferece um segundo fator independente.
 
-As sessões têm duração máxima de 8 horas. O estado da conta no AD é revalidado em até 60 segundos na próxima requisição e a associação ao grupo administrador é conferida a cada acesso ao painel. Falhas de LDAPS interrompem a autenticação. Para desenvolvimento controlado, `ALLOW_HTTP_DEV=true` permite HTTP local. Use HTTPS com contas reais.
+## Compilar
 
-## Migração de uma implantação anterior
+No Windows com .NET Framework 4.8 ou posterior:
 
-Em uma instalação nova, o Compose aplica `schema.sql` na criação do banco. Para atualizar uma instalação existente:
+```powershell
+.\Build.ps1 -ServerIp '192.0.2.10' -AdHost 'dc01.example.com'
+```
 
-1. Pare o aplicativo antigo. Faça backup do banco e guarde o valor anterior da chave de criptografia. Registre o ID local de cada usuário e confira, com o responsável pelo AD, o `ObjectGUID` da conta que deve receber o cofre.
-2. Aplique `migrations/002_ad_only.sql` uma vez e, em seguida, `schema.sql`. A migração remove os métodos de login legados e as permissões de compartilhamento. Os IDs e segredos dos tokens são preservados.
-3. Vincule manualmente cada ID local autorizado ao GUID do AD **antes do primeiro login** dessa conta. Se o GUID vier do PowerShell, converta os 16 bytes na ordem usada pelo LDAP, por exemplo `[Convert]::ToHexString($conta.ObjectGUID.ToByteArray()).ToLowerInvariant()` no PowerShell 7. O SQL é `UPDATE users SET ad_guid = '<32 caracteres hexadecimais>', ad_username = '<usuário AD>' WHERE id = <id local conferido> AND ad_guid IS NULL;`. O aplicativo nunca vincula uma conta antiga automaticamente pelo nome.
-4. Defina `LEGACY_ENCRYPTION_KEY` com o valor efetivo da configuração antiga e use uma chave aleatória de 32 bytes em `ENCRYPTION_KEY`. Confira a abertura de tokens antigos pelo dono correto após a migração. Mantenha backup seguro das chaves enquanto existirem tokens que dependam delas.
+A saída contém `Instalar-TOTPVault-Windows.exe` e `TOTPVault-Windows-Nativo.exe`. Os endereços da empresa são informados na compilação. O repositório não inclui credenciais ou certificados reais.
 
-O armazenamento usa AES-256-GCM. Proteja o servidor e mantenha a chave de criptografia separada do backup do banco. Os códigos são gerados no servidor e exigem conectividade com a rede que hospeda o cofre. Para sistemas que aceitam a mesma senha do AD, lembre que o login por senha neste cofre não oferece um segundo fator independente.
-
-A versão usa JavaScript e fontes servidos localmente. O importador de QR permite trazer tokens do Google Authenticator sem usar o serviço do Google para login.
-
-[Implantação em Kubernetes](charts/totpvault/README.md) · [Projeto original](https://github.com/token2/TOTPVault)
+[Configuração de LDAPS no Windows](https://learn.microsoft.com/pt-br/troubleshoot/windows-server/identity/enable-ldap-over-ssl-3rd-certification-authority) · [Vínculo HTTPS do HTTP.sys](https://learn.microsoft.com/pt-br/windows-server/administration/windows-commands/netsh-http)

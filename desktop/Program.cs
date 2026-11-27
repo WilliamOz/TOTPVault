@@ -17,7 +17,6 @@ namespace TotpVault {
     }
 
     internal sealed class VaultWindow : Form {
-        private readonly TextBox url = new TextBox { Text = BuildSettings.ServerUrl, MaxLength = 2048 };
         private readonly TextBox username = new TextBox { MaxLength = 80 };
         private readonly TextBox password = new TextBox { MaxLength = 1024, UseSystemPasswordChar = true };
         private readonly Button login = new Button();
@@ -31,6 +30,7 @@ namespace TotpVault {
         private readonly Button reveal = new Button();
         private readonly Button edit = new Button();
         private readonly Button delete = new Button();
+        private readonly Button admin = new Button { Visible = false };
         private readonly Timer timer = new Timer { Interval = 1000 };
         private readonly TableLayoutPanel loginPanel;
         private readonly TableLayoutPanel vaultPanel;
@@ -56,7 +56,6 @@ namespace TotpVault {
             loginPanel = Column(465);
             loginPanel.Controls.Add(Label("TOTPVault", 24, true));
             loginPanel.Controls.Add(Label("Entre com sua conta do Active Directory", 10, false));
-            AddField(loginPanel, "URL HTTPS do cofre", url);
             AddField(loginPanel, "Usuário do AD", username);
             AddField(loginPanel, "Senha", password);
             SetupButton(login, "Entrar", true);
@@ -98,7 +97,8 @@ namespace TotpVault {
             SetupButton(edit, "Editar", false);
             SetupButton(delete, "Excluir", false);
             SetupButton(signOut, "Sair", false);
-            actions.Controls.AddRange(new Control[] { add, edit, delete, signOut });
+            SetupButton(admin, "Usuários", false);
+            actions.Controls.AddRange(new Control[] { add, edit, delete, admin, signOut });
             vaultPanel.Controls.Add(actions);
             ConfigureStatus(vaultStatus);
             vaultPanel.Controls.Add(vaultStatus);
@@ -116,7 +116,7 @@ namespace TotpVault {
             Controls.Add(center);
             vaultPanel.Hide();
             AcceptButton = login;
-            Shown += (s, e) => { if (url.TextLength == 0) url.Focus(); else username.Focus(); };
+            Shown += (s, e) => username.Focus();
 
             login.Click += async (s, e) => await SignIn();
             signOut.Click += async (s, e) => await SignOut();
@@ -138,6 +138,13 @@ namespace TotpVault {
             add.Click += async (s, e) => await ChangeToken(null);
             edit.Click += async (s, e) => { if (Selected != null) await ChangeToken(Selected); };
             delete.Click += async (s, e) => await DeleteToken();
+            admin.Click += (s, e) => {
+                if (api == null) return;
+                var connection = api;
+                using (var window = new AdminWindow(connection, ex => {
+                    if (api == connection) HandleVaultError(ex);
+                })) window.ShowDialog(this);
+            };
             FormClosed += (s, e) => { timer.Stop(); timer.Dispose(); if (api != null) api.Dispose(); };
         }
 
@@ -148,7 +155,7 @@ namespace TotpVault {
             loginStatus.Text = "Entrando…";
             VaultApi candidate = null;
             try {
-                var server = VaultApi.ParseServer(url.Text);
+                var server = VaultApi.ParseServer(BuildSettings.ServerUrl);
                 if (username.TextLength == 0 || password.TextLength == 0) {
                     loginStatus.Text = "Informe seu usuário e sua senha do AD.";
                     return;
@@ -161,6 +168,7 @@ namespace TotpVault {
                 var profiles = await candidate.ListTokens();
                 api = candidate;
                 candidate = null;
+                admin.Visible = api.CanAdmin;
                 account.Text = signedAs;
                 loginPanel.Parent.Hide();
                 vaultPanel.Show();
@@ -309,7 +317,7 @@ namespace TotpVault {
                     case 400: return "Revise os dados informados.";
                     case 401: return atLogin ? "Usuário, senha ou acesso ao cofre inválido." : "Sessão encerrada.";
                     case 403: return "Seu acesso a esta operação foi recusado.";
-                    case 404: return "Recurso indisponível. Confira a URL e a versão do servidor.";
+                    case 404: return "Recurso indisponível. Confira a instalação do servidor.";
                     case 429: return "Muitas tentativas. Aguarde alguns minutos.";
                     case 503: return "O cofre ou o Active Directory está indisponível.";
                 }

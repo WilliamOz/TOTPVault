@@ -1,23 +1,7 @@
-# Secrets — never commit real configuration
-.env
-.env.*
-!.env.example
-/local-config/
-/desktop/bin/
-
-# PHP sessions
-sessions/*
-!sessions/.htaccess
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Docker volumes (if stored locally)
-docker/data/
+/bin/
+/obj/
+*.user
+implantacao.json
+servidor.json
+*.dat
+*.dat.bak
